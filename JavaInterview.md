@@ -3105,4 +3105,22034 @@ CLASS LOADING:
   Initialization-on-demand holder → idiomatic thread-safe lazy singleton
 ```
 
+# Java Collections Framework — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+The Java Collections Framework (JCF) is a unified architecture for representing and manipulating groups of objects. It provides interfaces, implementations, and algorithms that form the backbone of nearly every Java application.
+
+**Why it matters:**
+- Replaces ad-hoc array manipulation with type-safe, reusable data structures
+- Provides well-tested, performance-characterized implementations
+- Enables polymorphic algorithms (sort, search, shuffle) that work across implementations
+- Critical for system design: choosing the wrong collection is a common source of bugs, memory issues, and performance bottlenecks
+
+**Real-world scenarios:**
+- `HashMap` for O(1) lookups in caching layers
+- `ConcurrentHashMap` in multi-threaded request processing
+- `PriorityQueue` in task schedulers and Dijkstra's algorithm
+- `LinkedHashMap` for LRU cache implementations
+- `TreeMap` for range queries (e.g., time-series data, leaderboards)
+- `CopyOnWriteArrayList` in event listener registries
+
+---
+
+## Core Concepts
+
+- **Separation of interface from implementation** — code to `List`, not `ArrayList`
+- **Generics** — type safety at compile time, erasure at runtime
+- **Iterable/Iterator pattern** — uniform traversal across all collections
+- **Fail-fast vs fail-safe** — structural modification behavior during iteration
+- **Equals/hashCode contract** — correctness of Set and Map operations depends on this
+- **Comparable vs Comparator** — natural order vs custom order
+- **Capacity vs Size** — especially important for ArrayList and HashMap load factors
+
+---
+
+## Collection Hierarchy
+
+```
+java.lang.Iterable
+    └── java.util.Collection
+            ├── List (ordered, duplicates allowed)
+            │     ├── ArrayList
+            │     ├── LinkedList
+            │     ├── Vector (legacy)
+            │     └── Stack (legacy)
+            ├── Set (no duplicates)
+            │     ├── HashSet
+            │     ├── LinkedHashSet
+            │     └── SortedSet → NavigableSet → TreeSet
+            └── Queue (FIFO / priority)
+                  ├── LinkedList
+                  ├── PriorityQueue
+                  ├── ArrayDeque
+                  └── Deque → ArrayDeque, LinkedList
+
+java.util.Map (NOT a Collection)
+    ├── HashMap
+    ├── LinkedHashMap
+    ├── Hashtable (legacy)
+    └── SortedMap → NavigableMap → TreeMap
+```
+
+**Key insight:** `Map` does NOT extend `Collection`. It is a separate hierarchy entirely.
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. List Interface
+
+**Definition:** Ordered sequence of elements. Allows duplicates. Index-based access.
+
+**Key methods:** `get(int)`, `set(int, E)`, `add(int, E)`, `remove(int)`, `indexOf(E)`, `subList(from, to)`
+
+**Key Details:**
+- Maintains insertion order
+- `subList()` returns a **view** — mutations affect the original
+- `List.of()` (Java 9+) returns an **immutable** list
+- `Collections.unmodifiableList()` returns an unmodifiable **wrapper** (original still mutable)
+
+---
+
+### 2. ArrayList Internals
+
+**Backed by:** `Object[] elementData`
+
+**Default initial capacity:** 10
+
+**Growth strategy:** When full, grows to `(oldCapacity * 3) / 2 + 1` ≈ **1.5x** (Java source: `newCapacity = oldCapacity + (oldCapacity >> 1)`)
+
+```java
+// Amortized O(1) add — but can trigger O(n) copy on resize
+List<Integer> list = new ArrayList<>(100); // pre-size to avoid resizing
+list.add(42);
+
+// Random access O(1)
+Integer val = list.get(5);
+
+// Insertion in middle O(n) — shifts elements
+list.add(2, 99);
+
+// Trimming wasted capacity
+((ArrayList<Integer>) list).trimToSize();
+```
+
+**Trade-offs:**
+- ✅ O(1) random access
+- ✅ Cache-friendly (contiguous memory)
+- ❌ O(n) insert/delete in middle
+- ❌ Resize copies entire array
+
+**Common Pitfalls:**
+- Not pre-sizing when size is known → multiple resize copies
+- Using `remove(int index)` vs `remove(Object o)` — easy to confuse with autoboxing
+- Holding a `subList` reference after modifying the parent → `ConcurrentModificationException`
+
+---
+
+### 3. LinkedList Internals
+
+**Backed by:** Doubly-linked list of `Node<E>` objects, each holding `prev`, `next`, `item`
+
+**Implements both:** `List` AND `Deque`
+
+```java
+LinkedList<String> ll = new LinkedList<>();
+ll.addFirst("A");   // O(1)
+ll.addLast("B");    // O(1)
+ll.get(3);          // O(n) — traverses from head or tail
+ll.remove(3);       // O(n) to find, O(1) to remove
+
+// Use as Deque/Stack
+ll.push("X");       // addFirst
+ll.pop();           // removeFirst
+```
+
+**Trade-offs:**
+- ✅ O(1) insert/delete at head/tail
+- ✅ No resize cost
+- ❌ O(n) random access
+- ❌ High memory overhead per node (prev + next + object header ~24 bytes per node)
+- ❌ Poor cache locality — nodes scattered in heap
+
+**Senior insight:** In practice, `ArrayList` outperforms `LinkedList` for most use cases due to CPU cache effects. Use `LinkedList` primarily as a `Deque`, not a general `List`.
+
+---
+
+### 4. Set Interface
+
+**Definition:** Collection with no duplicate elements. Based on `equals()` and `hashCode()`.
+
+| Implementation | Order | Null | Performance |
+|---|---|---|---|
+| `HashSet` | None | 1 null | O(1) avg |
+| `LinkedHashSet` | Insertion order | 1 null | O(1) avg |
+| `TreeSet` | Sorted (natural/comparator) | No null | O(log n) |
+
+```java
+Set<String> set = new HashSet<>();
+set.add("apple");
+set.add("apple"); // ignored — no duplicate
+set.contains("apple"); // true, O(1)
+
+// LinkedHashSet preserves insertion order
+Set<String> linked = new LinkedHashSet<>();
+
+// TreeSet — sorted
+Set<String> tree = new TreeSet<>();
+tree.add("banana");
+tree.add("apple"); // iterates: apple, banana
+```
+
+---
+
+### 5. HashSet Internals
+
+**Backed by:** `HashMap<E, PRESENT>` where `PRESENT` is a static dummy `Object`.
+
+Every `HashSet` operation delegates to the underlying `HashMap`. This is important for memory: each "element" in a `HashSet` actually occupies a full `HashMap.Entry`.
+
+**Common Pitfalls:**
+- Mutable objects as keys: if you modify a field used in `hashCode()` after insertion, the object is **lost** in the set
+- Forgetting to override both `equals()` AND `hashCode()` in custom objects
+
+```java
+class BadKey {
+    int id;
+    // hashCode uses id, but id is mutable — DON'T DO THIS
+}
+```
+
+---
+
+### 6. Map Interface
+
+**Definition:** Key-value pairs. Keys are unique. Not a `Collection`.
+
+**Key methods:** `put(K,V)`, `get(K)`, `remove(K)`, `containsKey(K)`, `entrySet()`, `keySet()`, `values()`, `getOrDefault()`, `putIfAbsent()`, `computeIfAbsent()`, `merge()`
+
+```java
+Map<String, Integer> map = new HashMap<>();
+map.put("a", 1);
+
+// Java 8+ idiomatic usage
+map.getOrDefault("b", 0); // returns 0 if absent
+
+// Atomic compute — great for counting
+map.merge("a", 1, Integer::sum);
+
+// Compute only if absent (e.g., lazy init)
+map.computeIfAbsent("list", k -> new ArrayList<>()).add("value");
+
+// Iterate entries
+for (Map.Entry<String, Integer> e : map.entrySet()) {
+    System.out.println(e.getKey() + "=" + e.getValue());
+}
+```
+
+---
+
+### 7. HashMap Internals
+
+**The most important collection to understand deeply for interviews.**
+
+**Structure (Java 8+):**
+- Array of `Node<K,V>[]` called `table` — default initial capacity **16**
+- Each bucket is a **linked list** that becomes a **red-black tree** when bucket size ≥ 8 (and table size ≥ 64)
+- Tree reverts back to linked list when size drops ≤ 6
+
+**Load factor:** Default **0.75** — resize (rehash) triggered when `size > capacity * loadFactor`
+
+**Resize:** Doubles capacity, rehashes all entries — O(n)
+
+**Hash function:**
+```java
+// HashMap spreads high bits to reduce collisions
+static final int hash(Object key) {
+    int h;
+    return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
+}
+// Bucket index: (n - 1) & hash
+```
+
+**Put operation flow:**
+1. Compute `hash(key)`
+2. Find bucket: `index = (n-1) & hash`
+3. If bucket empty → insert new Node
+4. If bucket non-empty → traverse chain, check `hash == existing.hash && key.equals(existing.key)`
+5. If match → replace value; if no match → append (or tree-insert)
+6. If `++size > threshold` → `resize()`
+
+**Get operation flow:**
+1. Compute hash, find bucket
+2. Traverse linked list / tree until key match
+3. Return value or null
+
+```java
+// Pre-size to avoid rehashing (when size is known)
+// Formula: initialCapacity = expectedSize / loadFactor + 1
+Map<String, String> map = new HashMap<>(128, 0.75f);
+
+// Null key always goes to bucket 0
+map.put(null, "nullValue"); // allowed
+```
+
+**Trade-offs:**
+- ✅ O(1) average get/put
+- ✅ Null key and null values allowed
+- ❌ O(n) worst case (all keys hash to same bucket — pre-Java 8)
+- ❌ O(log n) worst case with tree bins (Java 8+)
+- ❌ Not thread-safe
+- ❌ No order guarantee
+
+**Common Pitfalls:**
+- Using mutable objects as keys (same as HashSet)
+- Poor `hashCode()` returning constant — degrades to O(n)
+- Not accounting for rehash cost in latency-sensitive paths
+
+---
+
+### 8. LinkedHashMap
+
+Extends `HashMap`, maintains a **doubly-linked list** through all entries in **insertion order** (or access order if `accessOrder=true`).
+
+```java
+// LRU Cache implementation using LinkedHashMap
+class LRUCache<K, V> extends LinkedHashMap<K, V> {
+    private final int capacity;
+
+    LRUCache(int capacity) {
+        super(capacity, 0.75f, true); // accessOrder=true
+        this.capacity = capacity;
+    }
+
+    @Override
+    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+        return size() > capacity;
+    }
+}
+```
+
+---
+
+### 9. TreeMap and TreeSet
+
+**Backed by:** Red-black tree (self-balancing BST)
+
+**Guarantees:** O(log n) for `put`, `get`, `remove`, `containsKey`
+
+**Key feature:** Elements maintained in **sorted order** (natural ordering or `Comparator`)
+
+```java
+TreeMap<String, Integer> tm = new TreeMap<>();
+tm.put("banana", 2);
+tm.put("apple", 1);
+tm.put("cherry", 3);
+
+tm.firstKey();               // "apple"
+tm.lastKey();                // "cherry"
+tm.headMap("cherry");        // {apple=1, banana=2} — exclusive
+tm.tailMap("banana");        // {banana=2, cherry=3} — inclusive
+tm.subMap("apple", "cherry"); // {apple=1, banana=2}
+tm.floorKey("blueberry");    // "banana" — greatest key ≤ given
+tm.ceilingKey("blueberry");  // "cherry" — smallest key ≥ given
+
+// TreeSet — same but just keys
+TreeSet<Integer> ts = new TreeSet<>(List.of(5, 1, 3, 2, 4));
+ts.headSet(3);  // [1, 2]
+ts.floor(3);    // 3
+ts.lower(3);    // 2
+```
+
+**TreeMap vs HashMap:**
+- Use `TreeMap` when you need sorted iteration or range queries
+- Use `HashMap` when you just need O(1) lookup
+- `TreeMap` nulls: allows null values but NOT null keys (NPE on comparison)
+
+---
+
+### 10. Queue Interface
+
+```
+Queue
+├── LinkedList       — general purpose, FIFO
+├── ArrayDeque       — faster than LinkedList, FIFO or LIFO
+├── PriorityQueue    — heap-based, priority order
+└── Deque (double-ended queue)
+      ├── ArrayDeque
+      └── LinkedList
+```
+
+**Queue contract — two API styles:**
+
+| Operation | Throws Exception | Returns null/false |
+|---|---|---|
+| Insert | `add(e)` | `offer(e)` |
+| Remove | `remove()` | `poll()` |
+| Examine | `element()` | `peek()` |
+
+**Prefer `offer`/`poll`/`peek`** — safer for bounded queues.
+
+```java
+// ArrayDeque as Stack (faster than Stack class)
+Deque<Integer> stack = new ArrayDeque<>();
+stack.push(1);   // addFirst
+stack.pop();     // removeFirst
+stack.peek();    // peekFirst
+
+// ArrayDeque as Queue
+Deque<Integer> queue = new ArrayDeque<>();
+queue.offer(1);  // addLast
+queue.poll();    // removeFirst
+
+// PriorityQueue — min-heap by default
+PriorityQueue<Integer> pq = new PriorityQueue<>();
+pq.offer(5); pq.offer(1); pq.offer(3);
+pq.poll(); // returns 1 — always min element
+
+// Max-heap
+PriorityQueue<Integer> maxPq = new PriorityQueue<>(Comparator.reverseOrder());
+
+// Custom priority
+PriorityQueue<int[]> taskQueue = new PriorityQueue<>(
+    Comparator.comparingInt(a -> a[1]) // sort by priority field
+);
+```
+
+**PriorityQueue internals:** Binary heap backed by array. `peek()` O(1), `poll()`/`offer()` O(log n), `contains()` O(n) — no fast contains.
+
+**ArrayDeque internals:** Circular array, resizes like ArrayList. No null elements allowed. Faster than `LinkedList` for stack/queue operations.
+
+---
+
+### 11. Comparable vs Comparator
+
+**Comparable** — natural ordering, implemented by the class itself
+
+```java
+class Employee implements Comparable<Employee> {
+    String name;
+    int salary;
+
+    @Override
+    public int compareTo(Employee other) {
+        return Integer.compare(this.salary, other.salary); // ascending salary
+    }
+}
+```
+
+**Comparator** — external, composable ordering strategy
+
+```java
+// Java 8+ Comparator composition
+Comparator<Employee> comp = Comparator
+    .comparingInt(Employee::getSalary)
+    .reversed()
+    .thenComparing(Employee::getName);
+
+List<Employee> employees = ...;
+employees.sort(comp);
+
+// Or
+employees.sort(
+    Comparator.comparingInt(Employee::getSalary)
+              .thenComparing(Comparator.naturalOrder())
+);
+```
+
+**Contract for both:** Must be consistent with `equals()` for sorted sets/maps.
+- `a.compareTo(b) == 0` should imply `a.equals(b)` (not required but strongly recommended)
+- Violating this causes `TreeSet`/`TreeMap` to appear to lose elements
+
+**Key methods:** `comparing()`, `comparingInt/Long/Double()`, `thenComparing()`, `reversed()`, `nullsFirst()`, `nullsLast()`
+
+---
+
+### 12. Sorting Mechanisms
+
+**`Collections.sort()` and `List.sort()`** — use **TimSort** (hybrid merge sort + insertion sort)
+- O(n log n) worst case, O(n) best case (nearly sorted data)
+- **Stable sort** — equal elements maintain relative order
+- Works on `List`, not arrays
+
+**`Arrays.sort()`:**
+- For **primitives**: Dual-Pivot Quicksort — O(n log n) avg, O(n²) worst case, **not stable**
+- For **objects**: TimSort (same as Collections.sort)
+
+```java
+int[] arr = {3, 1, 4, 1, 5};
+Arrays.sort(arr); // Dual-pivot quicksort — primitives
+
+Integer[] boxed = {3, 1, 4, 1, 5};
+Arrays.sort(boxed); // TimSort — objects
+
+// Partial sort
+Arrays.sort(arr, 1, 4); // sort indices 1 to 3 inclusive
+
+// Parallel sort (Java 8+) — uses ForkJoinPool
+Arrays.parallelSort(arr);
+
+// Stream sorted
+list.stream()
+    .sorted(Comparator.comparingInt(String::length))
+    .collect(Collectors.toList());
+```
+
+---
+
+### 13. Iterators
+
+**Iterator pattern:** Decouples traversal from collection structure.
+
+```java
+Iterator<String> it = list.iterator();
+while (it.hasNext()) {
+    String s = it.next();
+    if (s.startsWith("A")) {
+        it.remove(); // safe removal during iteration
+    }
+}
+
+// ListIterator — bidirectional
+ListIterator<String> lit = list.listIterator(list.size());
+while (lit.hasPrevious()) {
+    System.out.println(lit.previous());
+}
+lit.set("modified"); // replace last element returned
+lit.add("new");      // insert before next() element
+```
+
+**For-each loop** desugars to iterator — same fail-fast behavior.
+
+**Enhanced for loop with index trick:**
+```java
+// If you need index, use traditional for or IntStream
+IntStream.range(0, list.size())
+         .forEach(i -> process(i, list.get(i)));
+```
+
+---
+
+### 14. Fail-Fast vs Fail-Safe
+
+**Fail-Fast iterators** (most `java.util` collections):
+- Track `modCount` — a counter incremented on every structural modification
+- Iterator captures `expectedModCount = modCount` at creation
+- On `next()`/`remove()`: if `modCount != expectedModCount` → throw `ConcurrentModificationException`
+- This is **best-effort** — not guaranteed in multi-threaded scenarios, not a reliable sync mechanism
+
+```java
+List<String> list = new ArrayList<>(List.of("a", "b", "c"));
+for (String s : list) {
+    list.remove(s); // ConcurrentModificationException on second iteration
+}
+
+// Safe ways to remove during iteration:
+// 1. Iterator.remove()
+Iterator<String> it = list.iterator();
+while (it.hasNext()) { it.next(); it.remove(); }
+
+// 2. removeIf (Java 8+) — cleanest
+list.removeIf(s -> s.startsWith("a"));
+
+// 3. Collect removals, then removeAll
+List<String> toRemove = list.stream().filter(...).collect(toList());
+list.removeAll(toRemove);
+```
+
+**Fail-Safe iterators** (`java.util.concurrent` collections):
+- Operate on a **snapshot** or use lock-free mechanisms
+- No `ConcurrentModificationException`
+- May not reflect modifications made after iterator creation
+
+```java
+CopyOnWriteArrayList<String> cowList = new CopyOnWriteArrayList<>(List.of("a", "b", "c"));
+for (String s : cowList) {
+    cowList.add("d"); // NO exception — iterates over original snapshot
+}
+// CopyOnWriteArrayList: Creates new array on every write — O(n) writes, O(1) reads
+// Ideal for: read-heavy, rarely-modified collections (listener lists, config)
+
+ConcurrentHashMap<String, Integer> chm = new ConcurrentHashMap<>();
+// Iterator is weakly consistent — reflects some or all writes after creation
+```
+
+**Summary table:**
+
+| Feature | Fail-Fast | Fail-Safe |
+|---|---|---|
+| Exception on modification | Yes (`CME`) | No |
+| Uses original data | Yes | Snapshot / segments |
+| Memory overhead | Low | Higher (snapshot copy) |
+| Examples | `ArrayList`, `HashMap` | `CopyOnWriteArrayList`, `ConcurrentHashMap` |
+
+---
+
+### 15. Concurrent Collections
+
+**`ConcurrentHashMap`:**
+- Java 7: segment-level locking (16 segments by default)
+- Java 8+: **CAS + synchronized on individual bucket heads** — much finer granularity
+- `size()` is approximate — uses a `LongAdder`-style counter
+- Null keys/values **NOT** allowed (unlike `HashMap`)
+- Atomic operations: `putIfAbsent`, `computeIfAbsent`, `merge`, `replace`
+
+```java
+ConcurrentHashMap<String, List<String>> map = new ConcurrentHashMap<>();
+
+// Atomic group-by pattern
+map.computeIfAbsent("key", k -> new CopyOnWriteArrayList<>()).add("value");
+
+// Atomic merge (e.g., word count)
+map.merge("word", 1, Integer::sum);
+
+// Bulk operations (Java 8+) — parallel threshold
+map.forEach(1, (k, v) -> System.out.println(k + "=" + v));
+long count = map.reduceValues(1, String::length, Integer::sum);
+```
+
+**`CopyOnWriteArrayList`:**
+- Every write creates a new array copy — O(n)
+- Reads never block, no synchronization on read
+- Iterator is snapshot — will NOT see concurrent writes
+- Use case: event listeners, observer pattern registries
+
+**`BlockingQueue` implementations:**
+```java
+// Producer-consumer pattern
+BlockingQueue<Task> queue = new ArrayBlockingQueue<>(100); // bounded
+// OR
+BlockingQueue<Task> queue = new LinkedBlockingQueue<>(); // unbounded
+
+// Producer
+queue.put(task);   // blocks if full
+queue.offer(task, 1, TimeUnit.SECONDS); // timed offer
+
+// Consumer
+Task t = queue.take();   // blocks if empty
+Task t = queue.poll(1, TimeUnit.SECONDS); // timed poll
+```
+
+**BlockingQueue implementations:**
+
+| Class | Bound | Notes |
+|---|---|---|
+| `ArrayBlockingQueue` | Bounded | Single lock, FIFO |
+| `LinkedBlockingQueue` | Optional bound | Two locks (put/take), higher throughput |
+| `PriorityBlockingQueue` | Unbounded | Priority ordering |
+| `SynchronousQueue` | Zero capacity | Each put must wait for a take |
+| `DelayQueue` | Unbounded | Elements available after delay expires |
+
+**`ConcurrentLinkedQueue`:** Lock-free queue using CAS — high throughput, no blocking.
+
+---
+
+### 16. Immutable Collections
+
+```java
+// Java 9+ factory methods — most memory-efficient
+List<String> immList = List.of("a", "b", "c");
+Set<String> immSet = Set.of("x", "y", "z");
+Map<String, Integer> immMap = Map.of("a", 1, "b", 2);
+Map<String, Integer> immMapLarge = Map.ofEntries(
+    Map.entry("a", 1),
+    Map.entry("b", 2)
+    // up to any size
+);
+
+// Java 10+
+List<String> copy = List.copyOf(existingList); // immutable copy
+
+// Guava alternatives
+ImmutableList<String> guavaList = ImmutableList.of("a", "b");
+ImmutableMap<String, Integer> guavaMap = ImmutableMap.of("k", 1);
+
+// Older approach (wraps — original still mutable!)
+List<String> unmod = Collections.unmodifiableList(mutableList);
+```
+
+**`List.of()` vs `Collections.unmodifiableList()`:**
+- `List.of()`: Truly immutable, compact internal representation, no null elements allowed
+- `unmodifiableList()`: View over mutable list — original modifications are visible through the wrapper
+- `List.copyOf()`: Immutable, copies data, no null elements
+
+**Memory efficiency of `List.of()`:** Uses specialized internal classes (`List12` for 1-2 elements, `ListN` for more) — much lower overhead than `ArrayList`.
+
+---
+
+### 17. Collection Performance Tradeoffs
+
+| Operation | ArrayList | LinkedList | HashSet/HashMap | TreeSet/TreeMap | ArrayDeque |
+|---|---|---|---|---|---|
+| get(index) | O(1) | O(n) | N/A | N/A | O(1) |
+| add(end) | O(1) amort. | O(1) | O(1) avg | O(log n) | O(1) amort. |
+| add(middle) | O(n) | O(n)* | N/A | N/A | O(n) |
+| remove(middle) | O(n) | O(n)* | N/A | N/A | O(n) |
+| contains | O(n) | O(n) | O(1) avg | O(log n) | O(n) |
+| add(head) | O(n) | O(1) | N/A | N/A | O(1) |
+
+*LinkedList add/remove is O(1) given a reference to the node, but finding it is O(n)
+
+**Memory overhead (approximate):**
+- `ArrayList`: 16 bytes header + 4 bytes/reference (+ object itself)
+- `LinkedList`: 24 bytes/node (prev + next + element reference) + object
+- `HashMap.Entry`: ~32 bytes/entry (hash + key ref + value ref + next ref)
+- `TreeMap.Entry`: ~48 bytes/entry (key + value + left + right + parent + color)
+
+---
+
+## Interview Questions
+
+**Q1: Explain the internal working of `HashMap.put()` in detail.**
+
+When you call `put(key, value)`: (1) If table is null, initialize with default capacity 16. (2) Compute `hash = key.hashCode() ^ (key.hashCode() >>> 16)` to spread high-order bits. (3) Find bucket index: `i = (n-1) & hash`. (4) If bucket is empty, insert a new `Node`. (5) If bucket has entries, traverse: if `hash == existing.hash && (key == existing.key || key.equals(existing.key))`, replace value. Otherwise, append to chain. (6) If chain length ≥ 8 AND table size ≥ 64, convert chain to red-black tree. (7) If `++size > threshold (capacity * loadFactor)`, trigger `resize()` which doubles capacity and rehashes all entries.
+
+---
+
+**Q2: What happens when two keys have the same hashCode?**
+
+They end up in the same bucket — a hash collision. Pre-Java 8, all collisions form a linked list in that bucket, causing O(n) worst-case for get/put when all keys collide. Java 8+ converts the bucket to a red-black tree when chain length exceeds 8, giving O(log n) worst case. The key lesson: a poor `hashCode()` implementation (e.g., returning a constant) degrades `HashMap` to a linked list effectively.
+
+---
+
+**Q3: Why must you override `hashCode()` when you override `equals()`?**
+
+The contract: if `a.equals(b)` is true, then `a.hashCode() == b.hashCode()` must be true. If you override only `equals()`, two logically equal objects may hash to different buckets in a `HashMap`/`HashSet` — the map would fail to find an existing key, causing duplicate entries and broken behavior. The reverse (override `hashCode()` without `equals()`) is less dangerous but may cause performance issues.
+
+---
+
+**Q4: What is the difference between `fail-fast` and `fail-safe` iterators?**
+
+Fail-fast iterators (e.g., `ArrayList`, `HashMap`) throw `ConcurrentModificationException` if the collection is structurally modified during iteration (except through the iterator's own `remove()` method). They track `modCount` — a counter incremented on structural changes. This is best-effort and not a reliable synchronization mechanism. Fail-safe iterators (e.g., `CopyOnWriteArrayList`, `ConcurrentHashMap`) either operate on a snapshot or use lock-free reads, never throwing `CME`, but they may not reflect changes made after iteration starts.
+
+---
+
+**Q5: When would you use `LinkedList` over `ArrayList`?**
+
+Rarely in modern code. The canonical answer is "frequent insertions/deletions at both ends," but in practice `ArrayDeque` is faster than `LinkedList` even for that. Valid use cases: (1) Using it specifically as a `Deque`/double-ended queue. (2) When you have an `Iterator` reference to a specific node and need O(1) insert/delete at that position. In benchmarks, `ArrayList` beats `LinkedList` even for middle insertions up to surprisingly large sizes due to CPU cache efficiency (contiguous memory vs scattered nodes).
+
+---
+
+**Q6: How does `ConcurrentHashMap` differ from `Hashtable` and `synchronized HashMap`?**
+
+`Hashtable` and `Collections.synchronizedMap()` use a single lock for the entire map — only one thread can operate at a time. `ConcurrentHashMap` in Java 7 used segment-level locking (16 segments = 16x parallelism). Java 8+ uses CAS operations for most writes and synchronizes only on the first node of a bucket — effectively bucket-level locking. This allows concurrent reads (never blocked) and highly concurrent writes. Additionally, `ConcurrentHashMap` provides atomic bulk operations (`compute`, `merge`, `forEach`, `reduce`) and does not allow null keys or values.
+
+---
+
+**Q7: What is the time complexity of `TreeMap` operations and when should you use it?**
+
+All major operations (`get`, `put`, `remove`, `containsKey`) are O(log n). Use `TreeMap` when: (1) You need keys in sorted order. (2) You need range queries (`subMap`, `headMap`, `tailMap`). (3) You need `floorKey`/`ceilingKey`/`higherKey`/`lowerKey` operations. (4) Implementing time-series lookups, leaderboards, or interval problems. Avoid for simple key-value storage — `HashMap` is O(1) avg.
+
+---
+
+**Q8: Explain the `Comparable` vs `Comparator` trade-offs.**
+
+`Comparable` defines the *natural ordering* of a class and is implemented by the class itself (`compareTo()`). A class can have only one natural ordering. `Comparator` is an external strategy that can define multiple orderings and can be passed to sort methods or sorted collections. `Comparator` is preferable when: (1) You don't control the class source. (2) You need multiple orderings. (3) You want composable, reusable sorting logic (Java 8 `Comparator.comparing().thenComparing()`). Both must be consistent with `equals()` for use in `TreeSet`/`TreeMap`.
+
+---
+
+**Q9: How would you implement an LRU cache in Java?**
+
+Use `LinkedHashMap` with `accessOrder = true` and override `removeEldestEntry()`:
+
+```java
+class LRUCache<K, V> extends LinkedHashMap<K, V> {
+    private final int maxSize;
+    LRUCache(int maxSize) {
+        super(maxSize, 0.75f, true); // true = access-order
+        this.maxSize = maxSize;
+    }
+    @Override
+    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+        return size() > maxSize;
+    }
+}
+```
+
+For thread-safety, wrap with `Collections.synchronizedMap()` or use `ConcurrentHashMap` with explicit doubly-linked list management.
+
+---
+
+**Q10: What is the difference between `List.of()`, `Arrays.asList()`, and `Collections.unmodifiableList()`?**
+
+- `Arrays.asList()`: Fixed-size but **mutable** — you can `set()` elements but not `add()`/`remove()`. Backed by the original array.
+- `Collections.unmodifiableList()`: Unmodifiable **view** — the underlying list can still be modified, and changes are visible through the wrapper.
+- `List.of()` (Java 9+): Truly **immutable** — no modifications whatsoever, no null elements, not backed by anything mutable. More memory-efficient than ArrayList.
+
+---
+
+**Q11: When would you choose `ArrayDeque` over `LinkedList`?**
+
+Always prefer `ArrayDeque` when you need a stack or queue. It is backed by a resizable array (circular buffer), which gives better cache locality than `LinkedList`'s scattered heap nodes. `ArrayDeque` is faster for both `push`/`pop` and `offer`/`poll` operations in benchmarks. The only advantage of `LinkedList` as a deque is that it allows null elements — though relying on null semantics in a queue is a code smell anyway.
+
+---
+
+**Q12: What causes `ConcurrentModificationException` and how do you avoid it?**
+
+It's caused by structural modification (adding/removing elements) to a fail-fast collection while iterating it outside of the iterator's own `remove()`. Solutions: (1) Use `iterator.remove()` for removal during iteration. (2) Use `list.removeIf(predicate)` (Java 8+) — cleanest. (3) Collect elements to remove, then call `removeAll()`. (4) Use a `CopyOnWriteArrayList` for concurrent scenarios. (5) Use `ConcurrentHashMap` instead of `HashMap` in multi-threaded code.
+
+---
+
+**Q13: Explain `PriorityQueue` internals and complexity.**
+
+`PriorityQueue` is backed by a **binary min-heap** stored in an array. The heap property guarantees the smallest element is always at index 0. `peek()` is O(1). `offer(e)` inserts at the end and *sifts up* — O(log n). `poll()` removes root, moves last element to root, and *sifts down* — O(log n). `contains()` is O(n) — no index structure. `remove(Object)` is O(n) to find + O(log n) to reheapify. Not thread-safe — use `PriorityBlockingQueue` for concurrent use.
+
+---
+
+**Q14: What are the differences between `HashMap` and `LinkedHashMap`?**
+
+`LinkedHashMap` extends `HashMap` and additionally maintains a **doubly-linked list** connecting all entries in either insertion order (default) or access order (`accessOrder=true`). This adds one `before` and one `after` reference per entry (~16 extra bytes/entry). Performance is nearly identical to `HashMap` for put/get. The linked list enables: (1) Predictable iteration order. (2) LRU cache implementation via `removeEldestEntry()`. Use `LinkedHashMap` when iteration order matters or for LRU. Use `HashMap` for pure key-value storage.
+
+---
+
+**Q15: How do you choose the right initial capacity for a `HashMap`?**
+
+To avoid rehashing (which is O(n)), pre-size with: `initialCapacity = (int)(expectedSize / loadFactor) + 1`. For example, for 100 elements with default 0.75 load factor: `(int)(100 / 0.75) + 1 = 134`. Round up to next power of 2 for HashMap (it does this internally). This ensures no resize until size exceeds 100. Guava's `Maps.newHashMapWithExpectedSize(n)` does this calculation for you.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+### Memory and GC Impact
+- Large `HashMap` instances with millions of entries create GC pressure due to many small `Entry` objects
+- Consider off-heap alternatives (Chronicle Map, MapDB) for very large caches
+- `EnumMap` and `EnumSet` are extremely efficient for enum-keyed maps — use arrays internally
+- `IdentityHashMap` uses `==` instead of `equals()` — useful for serialization frameworks, cycle detection
+
+### Concurrency Design Decisions
+```
+// Anti-pattern: synchronized wrapper
+Map<K,V> m = Collections.synchronizedMap(new HashMap<>());
+// Compound operations still not atomic:
+if (!m.containsKey(k)) m.put(k, v); // RACE CONDITION
+
+// Correct: ConcurrentHashMap with atomic operation
+ConcurrentHashMap<K,V> chm = new ConcurrentHashMap<>();
+chm.putIfAbsent(k, v); // atomic
+chm.computeIfAbsent(k, key -> expensiveCompute(key)); // atomic
+```
+
+### Distribution / Sharding
+When designing distributed caches (e.g., Redis Cluster, consistent hashing):
+- Java `HashMap` concepts map directly to distributed hash tables
+- Load factor and bucket design influence hotspot behavior
+- Understanding `hashCode()` is critical for consistent hashing ring design
+
+### Java 21+ Considerations
+- **Sequenced Collections** (Java 21): New interfaces `SequencedCollection`, `SequencedSet`, `SequencedMap` add `getFirst()`, `getLast()`, `reversed()` to `List`, `LinkedHashSet`, `LinkedHashMap`
+- **Virtual threads** (Project Loom): Blocking queue operations no longer block carrier threads — simpler concurrent producer-consumer patterns
+
+### Design Patterns Using Collections
+- **Strategy + Comparator**: Plug-in sort strategies
+- **Decorator**: `Collections.unmodifiableList()`, `Collections.synchronizedList()`
+- **Template Method**: `AbstractList`, `AbstractMap` — extend these for custom collections
+- **Observer**: `CopyOnWriteArrayList` for listener registries
+- **Object Pool**: `ArrayDeque` as a pool of reusable objects
+
+### Integration Points
+- **Spring**: `@Autowired List<SomeBean>` injects all implementations — depends on JCF
+- **JPA**: `Set` vs `List` has major implications for Hibernate — `Set` avoids the "bag" problem with joins
+- **Streams API**: All collections are `Iterable` → `.stream()` → parallel stream → ForkJoin
+- **Jackson/serialization**: Collection type hints needed for generic deserialization
+
+---
+
+## Summary / Cheat Sheet
+
+```
+WHEN TO USE WHAT:
+─────────────────────────────────────────────────────────
+Need ordered, indexed access?          → ArrayList
+Need frequent head/tail ops?           → ArrayDeque
+Need stack?                            → ArrayDeque (push/pop)
+Need queue?                            → ArrayDeque (offer/poll)
+Need priority queue?                   → PriorityQueue
+Need fast lookup, no order?            → HashMap
+Need insertion-order iteration?        → LinkedHashMap
+Need sorted order / range queries?     → TreeMap / TreeSet
+Need unique elements, no order?        → HashSet
+Need unique elements, sorted?          → TreeSet
+Need thread-safe map?                  → ConcurrentHashMap
+Need thread-safe list (read-heavy)?    → CopyOnWriteArrayList
+Need producer-consumer queue?          → ArrayBlockingQueue / LinkedBlockingQueue
+Need immutable list?                   → List.of()
+Need LRU cache?                        → LinkedHashMap(accessOrder=true)
+
+KEY COMPLEXITIES:
+─────────────────────────────────────────────────────────
+ArrayList.get()            O(1)
+ArrayList.add(end)         O(1) amortized
+ArrayList.add(middle)      O(n)
+HashMap.get/put            O(1) avg, O(log n) Java 8+ worst
+TreeMap.get/put            O(log n) guaranteed
+HashSet.contains           O(1) avg
+PriorityQueue.poll         O(log n)
+PriorityQueue.peek         O(1)
+
+CRITICAL CONTRACTS:
+─────────────────────────────────────────────────────────
+equals() && hashCode()     — must both be overridden together
+compareTo() consistency    — should be consistent with equals()
+Mutable keys               — NEVER use mutable fields in hashCode/equals for keys
+Load factor 0.75           — HashMap default, balances space vs time
+
+THREAD SAFETY HIERARCHY:
+─────────────────────────────────────────────────────────
+Not safe:     ArrayList, HashMap, HashSet, TreeMap
+Synchronized: Collections.synchronizedXxx() — coarse lock
+Concurrent:   ConcurrentHashMap, CopyOnWriteArrayList — fine-grained
+Blocking:     ArrayBlockingQueue, LinkedBlockingQueue — coordination
+```
+# Java Generics — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+Generics enable **parameterized types** — write code that works with any type while maintaining full compile-time type safety. Introduced in Java 5 to eliminate the unsafe casting that plagued pre-generics collections code.
+
+**Why it matters:**
+- Catches type errors at **compile time** instead of runtime (`ClassCastException`)
+- Eliminates explicit casting — cleaner, more readable code
+- Enables reusable, type-safe algorithms and data structures
+- Foundational to understanding the entire Collections Framework, Streams API, and most modern Java libraries
+
+**Real-world applications:**
+- `List<T>`, `Map<K,V>`, `Optional<T>` — every collections API
+- `Repository<T, ID>` in Spring Data — generic DAO pattern
+- `ResponseEntity<T>` in Spring MVC — typed HTTP responses
+- `CompletableFuture<T>` — async result containers
+- `Pair<A,B>`, `Either<L,R>` — functional utility types
+- Custom builders, fluent APIs, type-safe event buses
+
+---
+
+## Core Concepts
+
+- **Type parameters** are placeholders resolved at compile time (`T`, `K`, `V`, `E`, `R` by convention)
+- **Type erasure** — generic type info is erased at runtime; JVM sees raw types
+- **Bounded types** — constrain what types can be substituted (`<T extends Comparable<T>>`)
+- **Wildcards** — express unknown types with flexibility (`?`, `? extends`, `? super`)
+- **PECS** — the rule governing wildcard direction: Producer Extends, Consumer Super
+- **Invariance** — `List<Dog>` is NOT a `List<Animal>`, even if `Dog extends Animal`
+- **Reification** — a type is reified if its full type info is available at runtime (generics are NOT reified in Java)
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. Generic Classes
+
+**Definition:** A class parameterized over one or more types, defined with type parameters in angle brackets.
+
+```java
+// Single type parameter
+public class Box<T> {
+    private T value;
+
+    public Box(T value) { this.value = value; }
+    public T get()       { return value; }
+    public void set(T value) { this.value = value; }
+
+    @Override
+    public String toString() {
+        return "Box[" + value + "]";
+    }
+}
+
+Box<String>  strBox  = new Box<>("hello");
+Box<Integer> intBox  = new Box<>(42);
+String s = strBox.get();  // no cast needed
+// strBox.set(123);        // compile error — type safety enforced
+
+// Multiple type parameters
+public class Pair<A, B> {
+    private final A first;
+    private final B second;
+
+    public Pair(A first, B second) {
+        this.first  = first;
+        this.second = second;
+    }
+
+    public A getFirst()  { return first; }
+    public B getSecond() { return second; }
+
+    // Static factory — type inferred
+    public static <A, B> Pair<A, B> of(A a, B b) {
+        return new Pair<>(a, b);
+    }
+}
+
+Pair<String, Integer> p = Pair.of("age", 30);
+```
+
+**Generic interfaces:**
+```java
+public interface Repository<T, ID> {
+    Optional<T> findById(ID id);
+    List<T> findAll();
+    T save(T entity);
+    void delete(ID id);
+}
+
+// Concrete implementation binds type parameters
+public class UserRepository implements Repository<User, Long> {
+    @Override
+    public Optional<User> findById(Long id) { ... }
+    // ...
+}
+```
+
+**Bounded generic class:**
+```java
+// T must be Comparable to itself — enables sorting internally
+public class SortedPair<T extends Comparable<T>> {
+    private final T min;
+    private final T max;
+
+    public SortedPair(T a, T b) {
+        this.min = a.compareTo(b) <= 0 ? a : b;
+        this.max = a.compareTo(b) <= 0 ? b : a;
+    }
+}
+
+SortedPair<Integer> sp = new SortedPair<>(10, 3); // min=3, max=10
+// SortedPair<Object> bad = new SortedPair<>(...); // compile error — Object not Comparable
+```
+
+**Key Details:**
+- Diamond operator `<>` (Java 7+) — type inferred from left-hand side: `new Box<>(...)`
+- Type parameters are **erased** at runtime — `Box<String>` and `Box<Integer>` are the same class at runtime
+- Cannot use primitives as type arguments — use wrapper types (`Integer`, not `int`)
+- Static fields/methods cannot use class-level type parameters (they belong to the class, not an instance)
+
+**Common Pitfalls:**
+```java
+// WRONG: static field using class type parameter
+public class Broken<T> {
+    private static T instance; // compile error
+}
+
+// WRONG: primitives as type arguments
+Box<int> b = new Box<>(5); // compile error — use Box<Integer>
+
+// WRONG: instanceof with generic type
+if (obj instanceof Box<String>) { } // compile error — type erased at runtime
+if (obj instanceof Box<?>) { }      // OK — unbounded wildcard
+```
+
+---
+
+### 2. Generic Methods
+
+**Definition:** Methods that introduce their own type parameters, independent of the class's type parameters. The type parameter is declared before the return type.
+
+```java
+public class Utils {
+
+    // Type parameter <T> declared before return type
+    public static <T> List<T> repeat(T item, int times) {
+        List<T> result = new ArrayList<>();
+        for (int i = 0; i < times; i++) result.add(item);
+        return result;
+    }
+
+    // Multiple type parameters
+    public static <K, V> Map<V, K> invertMap(Map<K, V> original) {
+        Map<V, K> inverted = new HashMap<>();
+        original.forEach((k, v) -> inverted.put(v, k));
+        return inverted;
+    }
+
+    // Bounded type parameter — T must extend Comparable
+    public static <T extends Comparable<T>> T max(T a, T b) {
+        return a.compareTo(b) >= 0 ? a : b;
+    }
+
+    // Return type depends on input type — identity function
+    public static <T> T identity(T value) {
+        return value;
+    }
+}
+
+// Type inference — compiler infers T = String
+List<String> strings = Utils.repeat("hello", 3);
+
+// Explicit type witness (rarely needed)
+List<String> explicit = Utils.<String>repeat("hello", 3);
+
+// Inverted map — K=String, V=Integer inferred
+Map<String, Integer> original = Map.of("a", 1, "b", 2);
+Map<Integer, String> inverted = Utils.invertMap(original);
+```
+
+**Generic methods with multiple bounds:**
+```java
+// T must extend both Comparable AND Serializable
+public static <T extends Comparable<T> & Serializable> T clampedMax(T a, T b) {
+    return a.compareTo(b) >= 0 ? a : b;
+}
+// Syntax: class bound must come first, interfaces after &
+// <T extends ClassName & Interface1 & Interface2>
+```
+
+**Generic constructor:**
+```java
+public class Container<T> {
+    private T value;
+
+    // Generic constructor — adds its own type param U
+    public <U extends T> Container(U value) {
+        this.value = value;
+    }
+}
+```
+
+**Key Details:**
+- Type inference works left-to-right from argument types — explicit type witness `<Type>method()` is a last resort
+- Generic methods are preferred over generic classes when the type relationship is local to one method
+- In Java 8+, lambda inference handles most cases where explicit witnesses were previously needed
+
+**Common Pitfalls:**
+```java
+// Pitfall: type inference failure with ambiguous targets
+// Compiler can't always infer from return type alone
+// This may require explicit witness:
+Collections.<String>emptyList();  // older code
+List<String> list = Collections.emptyList(); // fine — inferred from assignment
+```
+
+---
+
+### 3. Type Erasure
+
+**Definition:** The JVM has **no knowledge of generic type parameters at runtime**. The compiler removes all generic type information, replacing type parameters with their bounds (or `Object` if unbounded) and inserting casts where needed.
+
+**What the compiler does:**
+1. Replaces `T` with its bound (e.g., `Object` if unbounded, `Comparable` if `T extends Comparable`)
+2. Inserts synthetic bridge methods where needed to maintain polymorphism
+3. Inserts casts at call sites where the erased return type is used
+
+```java
+// Source code
+public class Box<T> {
+    private T value;
+    public T get() { return value; }
+    public void set(T value) { this.value = value; }
+}
+
+// After erasure (what the JVM sees)
+public class Box {
+    private Object value;           // T → Object (unbounded)
+    public Object get() { return value; }
+    public void set(Object value) { this.value = value; }
+}
+
+// Call site — compiler inserts cast automatically
+Box<String> box = new Box<>();
+box.set("hello");
+String s = box.get();    // Compiled as: String s = (String) box.get();
+```
+
+**Erasure with bounds:**
+```java
+// Source
+public class SortedBox<T extends Comparable<T>> {
+    private T value;
+    public T get() { return value; }
+    public int compareTo(T other) { return value.compareTo(other); }
+}
+
+// After erasure — T replaced with first bound: Comparable
+public class SortedBox {
+    private Comparable value;
+    public Comparable get() { return value; }
+    public int compareTo(Comparable other) { return value.compareTo(other); }
+}
+```
+
+**Bridge methods** — compiler-generated to preserve polymorphism:
+```java
+// Source
+public class StringBox extends Box<String> {
+    @Override
+    public String get() { return "hello"; }
+}
+
+// After erasure — compiler generates a bridge method
+public class StringBox extends Box {
+    public String get() { return "hello"; }         // overriding method
+
+    // Bridge method — synthetic, generated by compiler
+    public Object get() { return this.get(); }       // calls String version
+}
+```
+
+**Consequences of erasure:**
+
+```java
+// CANNOT do at runtime:
+new T();                    // cannot instantiate type parameter
+new T[10];                  // cannot create generic array
+obj instanceof List<String> // cannot check parameterized type
+T.class                     // no .class literal for type parameter
+
+// CAN work around with Class<T> token:
+public class TypeSafeContainer<T> {
+    private final Class<T> type;
+    private final T value;
+
+    public TypeSafeContainer(Class<T> type, T value) {
+        this.type = type;
+        this.value = value;
+    }
+
+    public boolean isInstance(Object obj) {
+        return type.isInstance(obj); // runtime check via token
+    }
+
+    public T cast(Object obj) {
+        return type.cast(obj);
+    }
+}
+
+TypeSafeContainer<String> c = new TypeSafeContainer<>(String.class, "hello");
+```
+
+**Heap pollution** — when a variable of a parameterized type holds a value of a different type:
+```java
+@SafeVarargs  // suppresses unchecked warning — only use when safe
+public static <T> List<T> asList(T... elements) {
+    return Arrays.asList(elements);
+}
+
+// Varargs + generics = heap pollution risk
+public static void dangerous(List<String>... lists) {
+    Object[] arr = lists;           // allowed — array covariance
+    arr[0] = List.of(42);           // heap pollution — List<Integer> in List<String> slot
+    String s = lists[0].get(0);     // ClassCastException at runtime
+}
+```
+
+**Reifiable types** (full type info available at runtime):
+- Primitive types: `int`, `double`, etc.
+- Non-generic classes: `String`, `Object`
+- Raw types: `List`, `Map`
+- Unbounded wildcards: `List<?>`, `Map<?,?>`
+- Arrays of reifiable types: `String[]`, `List<?>[]`
+
+**Key Details:**
+- This is why you get "unchecked cast" warnings — the compiler cannot guarantee type safety after erasure
+- `getClass()` on `List<String>` and `List<Integer>` returns the same `Class` object
+- Reflection cannot distinguish `List<String>` from `List<Integer>` — unless using `TypeToken` (Guava) or `ParameterizedType` via reflection
+
+**Common Pitfalls:**
+```java
+// Unchecked cast — compiler warning, potential ClassCastException
+Object raw = getFromCache("key");
+List<String> list = (List<String>) raw; // unchecked — can't verify at runtime
+
+// Suppressing correctly — only when you have verified correctness
+@SuppressWarnings("unchecked")
+List<String> safe = (List<String>) raw;
+```
+
+---
+
+### 4. Bounded Types
+
+**Upper bound** (`extends`): restricts T to a type or any of its **subtypes**.
+
+```java
+// T must be Number or a subtype (Integer, Double, etc.)
+public static <T extends Number> double sum(List<T> list) {
+    double total = 0;
+    for (T item : list) {
+        total += item.doubleValue(); // can call Number methods on T
+    }
+    return total;
+}
+
+sum(List.of(1, 2, 3));         // T = Integer
+sum(List.of(1.5, 2.5));        // T = Double
+// sum(List.of("a", "b"));     // compile error — String not a Number
+```
+
+**Multiple bounds:**
+```java
+// Class bound must come FIRST, interfaces follow with &
+public static <T extends Cloneable & Serializable & Comparable<T>>
+    T process(T item) { ... }
+
+// Practical example: bounded type for a generic sorter
+public static <T extends Comparable<T>> void sort(T[] arr) {
+    // Can call compareTo because T is bounded by Comparable<T>
+    for (int i = 0; i < arr.length - 1; i++) {
+        for (int j = i + 1; j < arr.length; j++) {
+            if (arr[i].compareTo(arr[j]) > 0) {
+                T temp = arr[i];
+                arr[i] = arr[j];
+                arr[j] = temp;
+            }
+        }
+    }
+}
+```
+
+**Recursive type bound** — type that refers to itself:
+```java
+// T extends Comparable<T> — T can be compared to itself
+// This is the most common recursive bound
+public static <T extends Comparable<T>> T min(List<T> list) {
+    return list.stream().min(Comparator.naturalOrder()).orElseThrow();
+}
+
+// Builder pattern with recursive bound (self-referential fluent API)
+public abstract class Builder<T, B extends Builder<T, B>> {
+    protected String name;
+
+    @SuppressWarnings("unchecked")
+    public B withName(String name) {
+        this.name = name;
+        return (B) this;  // returns concrete subtype
+    }
+
+    public abstract T build();
+}
+
+public class UserBuilder extends Builder<User, UserBuilder> {
+    private int age;
+
+    public UserBuilder withAge(int age) {
+        this.age = age;
+        return this;
+    }
+
+    @Override
+    public User build() { return new User(name, age); }
+}
+
+// Fluent chaining works correctly
+User user = new UserBuilder()
+    .withName("Alice")  // returns UserBuilder, not Builder
+    .withAge(30)
+    .build();
+```
+
+**Lower bound** — only available on wildcards, not type parameters:
+```java
+// ILLEGAL — cannot use lower bound on type parameter
+// public static <T super Integer> void method(T t) {} // compile error
+
+// Legal — lower bound only on wildcards
+public static void addIntegers(List<? super Integer> list) {
+    list.add(1);
+    list.add(2);
+}
+```
+
+**Key Details:**
+- `extends` in bounds means "extends or implements" — works for both classes and interfaces
+- A type parameter with no bound implicitly has `extends Object`
+- When multiple bounds are specified, the erased type is the leftmost bound
+
+**Common Pitfalls:**
+```java
+// Common confusion: <T extends Comparable<T>> vs <T extends Comparable>
+// Raw Comparable loses type safety — always use the parameterized form
+public static <T extends Comparable<T>> T max(T a, T b) { ... } // correct
+public static <T extends Comparable>    T max(T a, T b) { ... } // raw, unsafe
+```
+
+---
+
+### 5. Wildcards
+
+**Wildcards represent an unknown type.** They appear only in **type usage** (variable declarations, parameters, return types), never in class/method definitions as type parameters.
+
+**Three forms:**
+
+```
+?              — unbounded wildcard — any type
+? extends T    — upper-bounded wildcard — T or any subtype
+? super T      — lower-bounded wildcard — T or any supertype
+```
+
+**Unbounded wildcard `<?>`:**
+```java
+// Accept a list of any type — only use Object methods
+public static void printAll(List<?> list) {
+    for (Object item : list) {  // elements are Object — no type info
+        System.out.println(item);
+    }
+}
+
+printAll(List.of("a", "b"));  // List<String>
+printAll(List.of(1, 2, 3));   // List<Integer>
+
+// Cannot add to List<?> (except null) — type is unknown
+public static void badAdd(List<?> list) {
+    list.add("hello"); // compile error — cannot add to unknown type
+    list.add(null);    // null is always allowed
+}
+
+// Useful for instanceof (wildcards are reifiable)
+if (obj instanceof List<?>) { ... } // OK
+```
+
+**Upper-bounded wildcard `<? extends T>`:**
+```java
+// Read from a collection of T or any subtype
+public static double sumNumbers(List<? extends Number> list) {
+    double sum = 0;
+    for (Number n : list) {     // element type is at least Number
+        sum += n.doubleValue(); // can call Number methods
+    }
+    return sum;
+}
+
+sumNumbers(List.of(1, 2, 3));      // List<Integer> — Integer extends Number
+sumNumbers(List.of(1.5, 2.5));     // List<Double>  — Double extends Number
+
+// Producer — you can read T from it, but NOT write T to it
+public static void noWrite(List<? extends Number> list) {
+    Number n = list.get(0);      // OK — produces Number
+    list.add(1);                 // compile error — which Number subtype is it?
+    list.add(null);              // null only
+}
+```
+
+**Lower-bounded wildcard `<? super T>`:**
+```java
+// Write T (or subtypes) into a collection of T or any supertype
+public static void addNumbers(List<? super Integer> list) {
+    list.add(1);      // OK — Integer is-a Integer
+    list.add(2);      // OK
+    // list.add(1.5); // compile error — 1.5 is Double, not Integer or subtype
+}
+
+addNumbers(new ArrayList<Integer>());   // Integer super Integer
+addNumbers(new ArrayList<Number>());    // Number  super Integer
+addNumbers(new ArrayList<Object>());    // Object  super Integer
+
+// Consumer — you can write T to it, but reading gives only Object
+public static void noSpecificRead(List<? super Integer> list) {
+    list.add(42);        // OK — writing Integer
+    Integer i = list.get(0);  // compile error — could be Number or Object
+    Object  o = list.get(0);  // OK — worst case it's Object
+}
+```
+
+**Wildcard capture:**
+```java
+// Helper method pattern to capture wildcard type
+public static void swap(List<?> list, int i, int j) {
+    swapHelper(list, i, j); // delegate to capture helper
+}
+
+// Captures the unknown type as T
+private static <T> void swapHelper(List<T> list, int i, int j) {
+    T temp = list.get(i);
+    list.set(i, list.get(j));
+    list.set(j, temp);
+}
+```
+
+**Key Details:**
+- Wildcards are primarily for **API flexibility** — method parameters that accept a wider range of inputs
+- Wildcards in return types force callers to also use wildcards — avoid as return types
+- `List<?>` and `List<Object>` are very different: `List<Object>` only accepts `List<Object>`, while `List<?>` accepts any `List<X>`
+
+**Common Pitfalls:**
+```java
+// Pitfall: confusing List<Object> with List<?>
+void process(List<Object> list) {} // only accepts List<Object> — too restrictive
+void process(List<?> list)       {} // accepts any List<X> — more flexible
+
+// Pitfall: nesting wildcards incorrectly
+List<List<?>> listOfLists;          // each inner list can be a different type
+List<? extends List<?>> wildList;   // outer is also wildcard
+```
+
+---
+
+### 6. Covariance and Contravariance
+
+These describe how type relationships between parameterized types relate to type relationships between their arguments.
+
+**Invariance** (Java default for generics):
+```
+Dog extends Animal
+BUT: List<Dog> is NOT a subtype of List<Animal>
+```
+
+Why? Because it would break type safety:
+```java
+List<Dog> dogs = new ArrayList<>();
+List<Animal> animals = dogs;       // if this were allowed...
+animals.add(new Cat());            // Cat is an Animal — valid add
+Dog d = dogs.get(0);               // ClassCastException — it's a Cat!
+
+// Java prevents this at compile time — List<Dog> is NOT a List<Animal>
+```
+
+**Covariance** — `List<? extends Animal>` is a supertype of `List<Dog>`:
+- You can **read** Animals from it (produces)
+- You **cannot write** to it (consumer side broken — which subtype is it?)
+
+```java
+List<Dog> dogs = new ArrayList<>(List.of(new Dog()));
+List<? extends Animal> covariant = dogs;  // OK — covariant assignment
+
+Animal a = covariant.get(0);  // OK — produces Animal
+covariant.add(new Dog());     // compile error — cannot write
+covariant.add(new Animal());  // compile error — cannot write
+covariant.add(null);          // null only
+
+// Covariant read example
+public static void makeNoise(List<? extends Animal> animals) {
+    for (Animal a : animals) {  // each element is at least an Animal
+        a.makeSound();
+    }
+}
+makeNoise(new ArrayList<Dog>());  // List<Dog> accepted
+makeNoise(new ArrayList<Cat>());  // List<Cat> accepted
+```
+
+**Contravariance** — `List<? super Dog>` is a supertype of `List<Animal>`:
+- You can **write** Dogs to it (consumes)
+- Reading gives only `Object` (producer side broken — could be anything above Dog)
+
+```java
+List<Animal> animals = new ArrayList<>();
+List<? super Dog> contravariant = animals;  // OK — contravariant assignment
+
+contravariant.add(new Dog());      // OK — Dog is a Dog
+contravariant.add(new Labrador()); // OK — Labrador is a Dog (subtype)
+// contravariant.add(new Cat());   // compile error — Cat is not a Dog
+
+Object o = contravariant.get(0);   // OK — worst case it's Object
+Animal a = contravariant.get(0);   // compile error — might not be Animal
+```
+
+**Arrays are covariant (and unsound — a design flaw):**
+```java
+Dog[] dogs = new Dog[3];
+Animal[] animals = dogs;       // ALLOWED — arrays are covariant
+animals[0] = new Cat();        // compiles — Cat is an Animal
+// Runtime: ArrayStoreException — JVM checks at runtime
+
+// This is why arrays + generics mix poorly
+// List<Dog>[] is illegal for this reason
+```
+
+**Visual summary:**
+```
+Invariant:     List<Dog>              is NOT a  List<Animal>
+Covariant:     List<? extends Dog>    IS    a   List<? extends Animal>
+Contravariant: List<? super Animal>   IS    a   List<? super Dog>
+
+Array (covariant, unsound):
+               Dog[]                  IS    an  Animal[]   (but ArrayStoreException risk)
+```
+
+---
+
+### 7. PECS Principle
+
+**PECS = Producer Extends, Consumer Super**
+
+Coined by Joshua Bloch in *Effective Java*. It is the definitive rule for choosing between `? extends T` and `? super T`.
+
+```
+If a parameterized type T is a PRODUCER of T  → use <? extends T>
+If a parameterized type T is a CONSUMER of T  → use <? super T>
+If it's BOTH                                  → use <T> (invariant)
+If it's NEITHER                               → use <?>
+```
+
+**Mnemonic:** Think from the **method's perspective** — does it **produce** (read) elements, or **consume** (write/accept) elements?
+
+**PECS in action — `Collections.copy()`:**
+```java
+// Source PRODUCES T — use extends
+// Destination CONSUMES T — use super
+public static <T> void copy(List<? super T> dest, List<? extends T> src) {
+    for (int i = 0; i < src.size(); i++) {
+        T element = src.get(i);   // read from producer (extends)
+        dest.set(i, element);     // write to consumer (super)
+    }
+}
+
+List<Integer> src  = List.of(1, 2, 3);
+List<Number>  dest = new ArrayList<>(List.of(0.0, 0.0, 0.0));
+Collections.copy(dest, src);  // works — Number super Integer, Integer extends Integer
+```
+
+**PECS in action — custom example:**
+```java
+public class Stack<T> {
+
+    private List<T> elements = new ArrayList<>();
+
+    // CONSUMER — pushAll accepts items to WRITE onto stack
+    // Use ? super T — accept T or any supertype
+    public void pushAll(Iterable<? extends T> src) {  // src PRODUCES T
+        for (T item : src) {
+            elements.add(item);
+        }
+    }
+
+    // PRODUCER — popAll reads items FROM stack into dest
+    // Use ? super T — dest CONSUMES T
+    public void popAll(Collection<? super T> dest) {   // dest CONSUMES T
+        while (!elements.isEmpty()) {
+            dest.add(elements.remove(elements.size() - 1));
+        }
+    }
+}
+
+Stack<Number> stack = new Stack<>();
+
+// pushAll: List<Integer> passed — Integer extends Number ✓
+stack.pushAll(List.of(1, 2, 3));
+
+// popAll: List<Object> passed — Object super Number ✓
+List<Object> result = new ArrayList<>();
+stack.popAll(result);
+```
+
+**Without PECS — overly restrictive:**
+```java
+// Without PECS — too restrictive
+public void pushAll(Iterable<T> src) {}        // only accepts Iterable<Number>
+public void popAll(Collection<T> dest) {}      // only accepts Collection<Number>
+
+Stack<Number> stack = new Stack<>();
+stack.pushAll(List.of(1, 2, 3));  // compile error! List<Integer> ≠ List<Number>
+
+// With PECS — flexible
+stack.pushAll(List.of(1, 2, 3));  // List<Integer> — Integer extends Number ✓
+stack.pushAll(List.of(1.5, 2.5)); // List<Double>  — Double extends Number  ✓
+
+List<Object> objects = new ArrayList<>();
+stack.popAll(objects);             // Object super Number ✓
+```
+
+**PECS and `Comparator`/`Comparable`:**
+```java
+// Comparator CONSUMES T (to compare) — use ? super T
+public static <T extends Comparable<? super T>> T max(List<? extends T> list) {
+    //                              ^^^^^^^^^^
+    //              T or supertypes of T can define compareTo
+    //              e.g., if Dog extends Animal, and Animal implements Comparable<Animal>
+    //              then Dog can use Animal's compareTo
+    return list.stream().max(Comparator.naturalOrder()).orElseThrow();
+}
+
+// This is why Collections.sort signature is:
+public static <T extends Comparable<? super T>> void sort(List<T> list) {}
+//             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//             T can be compared by itself OR a supertype's compareTo
+```
+
+**PECS cheat sheet:**
+```
+METHOD READS  elements of type T from parameter → parameter is Producer → ? extends T
+METHOD WRITES elements of type T to  parameter → parameter is Consumer → ? super T
+METHOD does both                               → use T (no wildcard)
+METHOD only uses Object methods                → use ?
+
+Return types: AVOID wildcards in return types
+              — forces callers to use wildcards too
+              — use T or concrete type instead
+```
+
+---
+
+## Interview Questions
+
+**Q1: What is type erasure and what are its practical consequences?**
+
+Type erasure is the process by which the Java compiler removes all generic type information, replacing type parameters with their bounds (or `Object` if unbounded) and inserting casts at call sites. At runtime, `List<String>` and `List<Integer>` are identical — both are just `List`. Practical consequences: (1) Cannot use `instanceof` with parameterized types — `obj instanceof List<String>` is a compile error. (2) Cannot create generic arrays — `new T[10]` is illegal. (3) Cannot instantiate type parameters — `new T()` is illegal. (4) Unchecked cast warnings when casting to generic types. (5) Overloading based solely on type parameter is impossible — `void method(List<String>)` and `void method(List<Integer>)` have the same erasure. Work arounds include passing `Class<T>` tokens, using reflection with `ParameterizedType`, or library solutions like Guava's `TypeToken`.
+
+---
+
+**Q2: Explain why `List<Dog>` is not a `List<Animal>` even though `Dog extends Animal`. How do wildcards solve this?**
+
+Generics are **invariant** by design to ensure type safety. If `List<Dog>` were assignable to `List<Animal>`, you could add a `Cat` to what is actually a `List<Dog>`, causing a `ClassCastException` when reading. This is unlike arrays, which are covariant but compensate with a runtime `ArrayStoreException` — a weaker guarantee. Wildcards solve this by restricting operations: `List<? extends Animal>` (covariant) allows reading Animals but not writing; `List<? super Dog>` (contravariant) allows writing Dogs but reading gives only `Object`. The type system encodes the constraint: you lose the unsafe operation in exchange for the flexible subtype relationship.
+
+---
+
+**Q3: Explain PECS with a real example.**
+
+PECS (Producer Extends, Consumer Super) tells you which wildcard to use based on the role of the parameter. A **producer** provides elements you read out — use `? extends T`. A **consumer** accepts elements you write in — use `? super T`. Classic example: `Collections.copy(List<? super T> dest, List<? extends T> src)`. The `src` list *produces* T values (you read from it) so `? extends T`. The `dest` list *consumes* T values (you write to it) so `? super T`. This signature means you can copy `List<Integer>` into `List<Number>` — something impossible without PECS.
+
+---
+
+**Q4: What is the difference between `<T extends Comparable<T>>` and `<T extends Comparable<? super T>>`?**
+
+`<T extends Comparable<T>>` requires that T directly implements `Comparable<T>`. `<T extends Comparable<? super T>>` is more flexible: T (or any of its supertypes) can implement `Comparable`. The practical difference: if `Animal implements Comparable<Animal>` and `Dog extends Animal` without implementing `Comparable`, then `Dog` satisfies `<T extends Comparable<? super T>>` (because `Animal` is a supertype that implements `Comparable<Animal>`) but does NOT satisfy `<T extends Comparable<T>>`. This is why `Collections.sort` uses the `? super T` form — it handles inherited `Comparable` implementations correctly.
+
+---
+
+**Q5: When would you use an unbounded wildcard `?` vs a bounded wildcard vs a type parameter?**
+
+Use **`<?>`** when you only need `Object`-level operations and don't need to relate types across parameters — e.g., `printList(List<?> list)`. Use **`? extends T`** or **`? super T`** (wildcards) when you want flexibility in a *single* position with no type relationship to other positions — typically method parameters. Use a **type parameter `<T>`** when: (1) The type appears in multiple positions that must be consistent — return type + parameter type. (2) You need to name the type to use it — `T get()` vs `? get()` (illegal). (3) You need to enforce a relationship between two parameters — `<T> void copy(List<T> src, List<T> dest)`. Rule of thumb: use wildcards in parameters for flexibility, use type parameters when you need to refer to the type in multiple places.
+
+---
+
+**Q6: Why can't you create a generic array like `new T[10]` or `new List<String>[10]`?**
+
+Because of type erasure combined with array covariance. Arrays are covariant (`Dog[]` is an `Animal[]`) and store their element type at runtime for `ArrayStoreException` checks. Generic arrays can't work safely: (1) `new T[10]` — after erasure, this becomes `new Object[10]`, but the runtime type is wrong — the array won't enforce that only `T` is stored. (2) `new List<String>[10]` — after erasure it becomes `new List[10]`, and through array covariance it could be assigned to `Object[]`, allowing a `List<Integer>` to be stored, causing a later `ClassCastException`. Alternatives: use `List<T>` instead of `T[]`, use `(T[]) new Object[n]` with `@SuppressWarnings("unchecked")`, or pass a `Class<T>` and use `Array.newInstance(type, n)`.
+
+---
+
+**Q7: What is a bounded wildcard and when would you use it over a type parameter?**
+
+A bounded wildcard (`? extends T` or `? super T`) expresses a constraint on an *unknown* type. Use wildcards in method parameters when you don't need to refer to the type elsewhere. Use bounded type parameters `<T extends SomeClass>` when you need to use the type by name (return it, use it in multiple parameters, create instances). Example: `<T extends Number> T sum(List<T> list)` returns `T` — must be a type parameter. But `double sum(List<? extends Number> list)` where the return is always `double` — wildcard is fine and more flexible (accepts `List<Integer>`, `List<Double>`, etc.).
+
+---
+
+**Q8: What is heap pollution and how does it relate to generics?**
+
+Heap pollution occurs when a variable of a parameterized type holds a value of a different type — violating the invariant that the JVM's type system is supposed to ensure. This happens when you mix raw types with generic types, or with generic varargs. The `@SafeVarargs` annotation suppresses the warning when you can guarantee no heap pollution occurs. The classic trap: `void dangerous(List<String>... lists)` — inside the method, `lists` is a `List[]` (erased), and you can store a `List<Integer>` into it via array covariance, corrupting the type assumptions of callers.
+
+---
+
+**Q9: How do you retain generic type information at runtime (workarounds for erasure)?**
+
+Three main approaches: (1) **Class token** — pass `Class<T>` as a constructor/method argument: `new TypedContainer<>(String.class)`. Allows `isInstance()` and `cast()` checks. (2) **Reflection with `ParameterizedType`** — inspect generic superclass type at runtime: `((ParameterizedType) getClass().getGenericSuperclass()).getActualTypeArguments()[0]`. Used by frameworks like Jackson for deserialization. (3) **Anonymous subclass trick / TypeToken** (Guava) — create an anonymous subclass to "capture" the type: `new TypeToken<List<String>>(){}` preserves `List<String>` in the bytecode as the generic supertype of the anonymous class, making it inspectable via reflection. This is the basis of Jackson's `TypeReference` and Guava's `TypeToken`.
+
+---
+
+**Q10: Explain the difference between raw types and unbounded wildcards.**
+
+A raw type (`List`) turns off all generic type checking — you can add anything, and you get `Object` back with unchecked cast warnings. It exists solely for backward compatibility with pre-Java 5 code. An unbounded wildcard (`List<?>`) retains type safety — you cannot add non-null elements because the element type is unknown. Reading gives `Object`. The compiler still tracks that this is a parameterized list and enforces that you can't add typed elements. Prefer `List<?>` over raw `List` — raw types lose all compile-time checking. The only valid use of raw types is for class literals (`List.class`) and `instanceof` checks (`obj instanceof List`).
+
+---
+
+**Q11: Can you overload methods that differ only in their type parameters? Why or why not?**
+
+No. Due to erasure, `void method(List<String> list)` and `void method(List<Integer> list)` erase to the same signature `void method(List list)` — a compile error. This is why you see `process(List<String>)` and `processInts(List<Integer>)` in older APIs. Similarly, you cannot overload based on a generic return type. The workaround is to use different method names or to pass a `Class<T>` discriminator parameter. Note: you CAN overload with different numbers of type parameters or when the erasure produces different signatures, e.g., `void method(T t)` and `void method(List<T> list)` erase to `void method(Object)` vs `void method(List)` — those are different.
+
+---
+
+**Q12: What does `<T extends Comparable<T>>` mean and why is it a recursive bound?**
+
+It means "T is a type that can be compared to other instances of itself." The recursion is that T appears both as the type being bounded and as the argument to `Comparable`. This is necessary to guarantee the `compareTo` method takes a `T` argument — not just any `Object`. Without the recursive bound, calling `a.compareTo(b)` where `b` is `T` would be unsafe. The pattern appears everywhere natural ordering is needed: `TreeMap`, `Collections.sort`, custom generic sorting utilities. The extended form `<T extends Comparable<? super T>>` is even more flexible — T or any of its supertypes can define the `compareTo` method.
+
+---
+
+**Q13: How does the generic type system interact with inheritance and method overriding?**
+
+When a subclass overrides a generic method from a superclass with a different type parameter, the compiler generates a **bridge method** to maintain polymorphism after erasure. For example, if `class StringBox extends Box<String>` overrides `set(String value)`, after erasure `Box` has `set(Object value)` — the compiler generates a bridge `set(Object v) { set((String) v); }` in `StringBox` so that the overriding works correctly through polymorphic dispatch. Bridge methods are synthetic and invisible in source code but visible in bytecode via `javap`. They can cause confusion with reflection when you see unexpected methods. They're also why you may see multiple `compareTo` methods in decompiled output.
+
+---
+
+**Q14: What is wildcard capture and when do you need it?**
+
+Wildcard capture is when you need to perform an operation on `List<?>` that requires knowing the type — but the type is unknown. You solve it by delegating to a private generic helper method that "captures" the wildcard into a named type parameter. Example: swapping elements in a `List<?>` requires a temp variable of the list's element type. You can't declare `? temp` but you can write `private <T> void swapHelper(List<T> list, int i, int j)` and call it from the public `swap(List<?> list, int i, int j)` method. The compiler performs the capture when passing `List<?>` to `List<T>` — it infers a specific (unknown) type for `T`.
+
+---
+
+**Q15: How do frameworks like Jackson handle generic type deserialization given erasure?**
+
+Jackson (and similar frameworks) use the **anonymous subclass trick**. The `TypeReference<T>` class is designed to be subclassed: `new TypeReference<List<String>>(){}`. The anonymous subclass's generic supertype `TypeReference<List<String>>` is preserved in bytecode as a `ParameterizedType`. Jackson retrieves it via `getClass().getGenericSuperclass()`, then calls `getActualTypeArguments()` to get the `List<String>` type, which it uses to drive deserialization. Guava's `TypeToken` formalizes this pattern. This is one of the few places where runtime generic type info survives — because the type is embedded in the class hierarchy, not in a local variable.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+### Generic Design Patterns
+
+**Type-safe heterogeneous container (Bloch's pattern):**
+```java
+// A map that can hold values of different types, each type-safe
+public class TypesafeMap {
+    private Map<Class<?>, Object> map = new HashMap<>();
+
+    public <T> void put(Class<T> type, T value) {
+        map.put(type, type.cast(value)); // cast verifies type at put time
+    }
+
+    public <T> T get(Class<T> type) {
+        return type.cast(map.get(type)); // safe cast
+    }
+}
+
+TypesafeMap tm = new TypesafeMap();
+tm.put(String.class, "hello");
+tm.put(Integer.class, 42);
+String s = tm.get(String.class);   // no cast needed, type-safe
+Integer i = tm.get(Integer.class);
+```
+
+**Generic singleton factory:**
+```java
+// Single instance works for all types because of erasure
+// but appears typed to callers
+private static final UnaryOperator<Object> IDENTITY = x -> x;
+
+@SuppressWarnings("unchecked")
+public static <T> UnaryOperator<T> identityFunction() {
+    return (UnaryOperator<T>) IDENTITY;
+}
+
+UnaryOperator<String> strId = identityFunction();
+UnaryOperator<Integer> intId = identityFunction(); // same object, different type view
+```
+
+### Generics and Performance
+- Autoboxing cost: `List<Integer>` requires boxing/unboxing on every access — for performance-critical numeric collections, consider `int[]`, or Eclipse Collections' `IntList`, or `trove4j`
+- Type erasure means no code bloat (unlike C++ templates which generate code per type) — one `.class` file serves all parameterized uses
+- Virtual dispatch through generic interfaces adds no overhead beyond normal polymorphism
+
+### Generics and Reflection
+```java
+// Inspect generic type at runtime via reflection
+Field field = MyClass.class.getDeclaredField("myList");
+ParameterizedType pt = (ParameterizedType) field.getGenericType();
+Type elementType = pt.getActualTypeArguments()[0]; // String for List<String>
+
+// Works for fields, method return types, method parameter types
+// Does NOT work for local variables — erased entirely
+```
+
+### Integration with Modern Java
+- **Streams API**: Heavily generic — `Stream<T>`, `Collector<T,A,R>`, `Function<T,R>`, etc. — PECS appears throughout
+- **Optional<T>**: Monadic container — use `map()`, `flatMap()` to chain generic transformations
+- **CompletableFuture<T>**: Generic async pipelines — `thenApply(Function<T,R>)` uses bounded wildcards internally
+- **Records** (Java 16+): Can be generic — `record Pair<A,B>(A first, B second) {}`
+- **Sealed classes** (Java 17+): Combine with generics for algebraic data types — `sealed interface Result<T> permits Success<T>, Failure<T>`
+
+---
+
+## Summary / Cheat Sheet
+
+```
+DECLARATION SYNTAX:
+─────────────────────────────────────────────────────────
+class Box<T>                      generic class
+class Pair<A, B>                  multiple type params
+<T> T method(T arg)               generic method
+<T extends Comparable<T>> T max() bounded type param
+<T extends C & I1 & I2>           multiple bounds (class first)
+
+WILDCARD RULES (PECS):
+─────────────────────────────────────────────────────────
+? extends T    Producer  → READ from it  (covariant)
+? super T      Consumer  → WRITE to it  (contravariant)
+?              Unknown   → Object ops only
+No wildcard    Both      → Read AND write, type must match
+
+WHAT YOU CAN'T DO (erasure):
+─────────────────────────────────────────────────────────
+new T()                 no generic instantiation
+new T[n]                no generic array
+instanceof List<String> no parameterized instanceof
+T.class                 no class literal
+overload on T only      same erasure = same signature
+
+TYPE RELATIONSHIPS:
+─────────────────────────────────────────────────────────
+List<Dog>              NOT a  List<Animal>   (invariant)
+List<? extends Dog>    IS  a  List<? extends Animal>
+List<? super Animal>   IS  a  List<? super Dog>
+Dog[]                  IS  an Animal[]  (covariant, unsound)
+
+WHEN TO USE WHAT:
+─────────────────────────────────────────────────────────
+Return a typed value            → <T> T method()
+Accept readable collection      → List<? extends T>
+Accept writable collection      → List<? super T>
+Accept any typed collection     → List<?>
+Relate two params by type       → <T> void method(List<T> a, List<T> b)
+Runtime type operations         → Class<T> token
+Preserve full generic type      → TypeToken / TypeReference
+
+KEY RULES FROM EFFECTIVE JAVA:
+─────────────────────────────────────────────────────────
+Item 26: Don't use raw types
+Item 28: Prefer lists to arrays (arrays covariant + reified = unsafe mix)
+Item 29: Favor generic types
+Item 30: Favor generic methods
+Item 31: Use bounded wildcards to increase API flexibility (PECS)
+Item 32: Combine generics and varargs judiciously (@SafeVarargs)
+Item 33: Consider typesafe heterogeneous containers
+```
+# Java Exception Handling — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+Exception handling is Java's mechanism for dealing with **abnormal conditions** that disrupt normal program flow. It separates error-handling logic from business logic, enables structured error propagation up the call stack, and provides a contract between method callers and implementors about what can go wrong.
+
+**Why it matters:**
+- Distinguishes **recoverable conditions** (checked) from **programming errors** (unchecked)
+- Enforces error handling at compile time for critical failure paths
+- Enables clean resource management via `finally` and `try-with-resources`
+- Defines the **failure contract** of an API — as important as the success contract
+- Misuse is one of the most common sources of bugs, resource leaks, and silent failures in production systems
+
+**Real-world applications:**
+- Database connection failures → checked `SQLException` → retry logic or fallback
+- Invalid user input → custom `ValidationException` → HTTP 400 response
+- Null pointer in business logic → `NullPointerException` → signals a programming bug
+- File not found → `FileNotFoundException` → user-facing error message
+- Service timeout → custom `ServiceUnavailableException` → circuit breaker triggers
+- Transaction rollback on any `RuntimeException` in Spring `@Transactional`
+
+---
+
+## Core Concepts
+
+- **Throwable** is the root of the entire exception hierarchy — only `Throwable` instances can be thrown
+- **Checked exceptions** are part of a method's contract — compiler enforces handling or declaration
+- **Unchecked exceptions** (`RuntimeException` + `Error`) — compiler does not require handling
+- **Stack unwinding** — when an exception is thrown, the JVM walks up the call stack looking for a matching `catch`
+- **Exception propagation** — uncaught exceptions bubble up until caught or they reach the JVM and terminate the thread
+- **Finally** always executes (with one narrow exception) — guarantees resource cleanup
+- **Exception chaining** — wrapping a lower-level cause in a higher-level abstraction preserves root cause
+
+---
+
+## Exception Hierarchy
+
+```
+java.lang.Throwable
+├── java.lang.Error                        (unchecked — JVM-level, unrecoverable)
+│     ├── OutOfMemoryError
+│     ├── StackOverflowError
+│     ├── AssertionError
+│     ├── VirtualMachineError
+│     └── LinkageError
+│           └── NoClassDefFoundError
+│
+└── java.lang.Exception                    (root of all exceptions)
+      ├── IOException                      (checked)
+      │     ├── FileNotFoundException
+      │     ├── SocketException
+      │     └── EOFException
+      ├── SQLException                     (checked)
+      ├── CloneNotSupportedException       (checked)
+      ├── InterruptedException             (checked)
+      ├── ReflectiveOperationException     (checked)
+      │
+      └── RuntimeException                (unchecked — programming errors)
+            ├── NullPointerException
+            ├── IllegalArgumentException
+            │     └── NumberFormatException
+            ├── IllegalStateException
+            ├── IndexOutOfBoundsException
+            │     ├── ArrayIndexOutOfBoundsException
+            │     └── StringIndexOutOfBoundsException
+            ├── ClassCastException
+            ├── ArithmeticException
+            ├── UnsupportedOperationException
+            ├── ConcurrentModificationException
+            └── NoSuchElementException
+```
+
+**Key structural rules:**
+- `Error` — JVM-level, catastrophic, should never be caught (except in frameworks/JVM tools)
+- `Exception` — base for all application exceptions
+- `RuntimeException` — unchecked; signals programmer mistakes
+- Everything except `RuntimeException` and `Error` subtrees → checked
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. Checked vs Unchecked Exceptions
+
+**Checked exceptions:**
+- Subclass of `Exception` but NOT `RuntimeException`
+- Compiler enforces: must either `catch` or declare with `throws`
+- Represent **anticipated, recoverable** conditions outside the program's control
+- Examples: `IOException`, `SQLException`, `InterruptedException`
+
+**Unchecked exceptions:**
+- Subclass of `RuntimeException` or `Error`
+- No compiler enforcement — can propagate freely
+- Represent **programming errors** or **unrecoverable** JVM conditions
+- Examples: `NullPointerException`, `IllegalArgumentException`, `StackOverflowError`
+
+```java
+// Checked — compiler forces you to handle or declare
+public String readFile(String path) throws IOException {       // must declare
+    return Files.readString(Path.of(path));                    // throws checked IOException
+}
+
+public void caller() {
+    try {
+        String content = readFile("data.txt");
+    } catch (IOException e) {                                  // must catch or re-throw
+        System.err.println("File read failed: " + e.getMessage());
+    }
+}
+
+// Unchecked — no compiler enforcement
+public int divide(int a, int b) {                              // no throws needed
+    if (b == 0) throw new IllegalArgumentException("Divisor cannot be zero");
+    return a / b;
+}
+
+public void uncheckedCaller() {
+    int result = divide(10, 0);    // compiles — no forced handling
+    // ArithmeticException would propagate if b=0 naturally
+}
+```
+
+**The checked vs unchecked debate — senior perspective:**
+
+Joshua Bloch's rule from *Effective Java*:
+- Use **checked** when the caller can reasonably be expected to recover
+- Use **unchecked** when the exception indicates a programming error, or recovery is not realistic
+
+Modern trend (Spring, most frameworks) leans toward **unchecked**:
+- Checked exceptions break functional interfaces (`Function<T,R>` cannot throw checked exceptions)
+- They create verbose boilerplate that often just gets swallowed
+- They couple API layers — a low-level `SQLException` leaks into high-level business code
+
+```java
+// Checked exceptions break lambdas
+List<String> paths = List.of("a.txt", "b.txt");
+
+// DOES NOT COMPILE — Files.readString throws checked IOException
+paths.stream()
+     .map(Files::readString)     // compile error
+     .collect(Collectors.toList());
+
+// Workaround — wrap in unchecked
+paths.stream()
+     .map(path -> {
+         try { return Files.readString(Path.of(path)); }
+         catch (IOException e) { throw new UncheckedIOException(e); } // wrap
+     })
+     .collect(Collectors.toList());
+
+// Or use a utility
+@FunctionalInterface
+interface CheckedFunction<T, R> {
+    R apply(T t) throws Exception;
+
+    static <T, R> Function<T, R> wrap(CheckedFunction<T, R> fn) {
+        return t -> {
+            try { return fn.apply(t); }
+            catch (Exception e) { throw new RuntimeException(e); }
+        };
+    }
+}
+
+paths.stream()
+     .map(CheckedFunction.wrap(p -> Files.readString(Path.of(p))))
+     .collect(Collectors.toList());
+```
+
+**Common Pitfalls:**
+- Catching `Exception` or `Throwable` to silence checked exceptions — hides real problems
+- Catching `Error` subtypes — almost always wrong
+- Declaring `throws Exception` on everything — defeats the purpose of checked exceptions
+
+---
+
+### 2. try-catch-finally
+
+**Basic structure:**
+```java
+try {
+    // guarded code — may throw
+} catch (SpecificException e) {
+    // handle specific exception
+} catch (AnotherException e) {
+    // handle another type
+} finally {
+    // ALWAYS executes — with or without exception, with or without return
+}
+```
+
+**Multi-catch** (Java 7+) — handle multiple unrelated exceptions the same way:
+```java
+try {
+    riskyOperation();
+} catch (IOException | SQLException e) {    // e is implicitly final here
+    log.error("Operation failed", e);
+    throw new ServiceException("Data access failed", e);
+}
+```
+
+**Exception hierarchy in catch blocks — order matters:**
+```java
+// WRONG — unreachable catch block
+try {
+    Files.readString(Path.of("file.txt"));
+} catch (Exception e) {          // catches everything
+    // ...
+} catch (IOException e) {        // compile error — unreachable, Exception is broader
+    // ...
+}
+
+// CORRECT — specific to general
+try {
+    Files.readString(Path.of("file.txt"));
+} catch (FileNotFoundException e) {    // most specific first
+    // file doesn't exist
+} catch (IOException e) {             // broader
+    // other I/O error
+}
+```
+
+**Finally behavior — the guarantee:**
+```java
+public int finallyDemo() {
+    try {
+        System.out.println("try");
+        return 1;                  // finally still runs before method returns
+    } catch (Exception e) {
+        System.out.println("catch");
+        return 2;
+    } finally {
+        System.out.println("finally"); // ALWAYS runs
+        // return 3;  // BAD — overrides try/catch return, swallows exceptions
+    }
+}
+// Output: "try" then "finally", returns 1
+
+// Finally does NOT run in two cases:
+// 1. System.exit() is called
+// 2. JVM crashes / power failure (OS-level)
+// 3. Infinite loop or deadlock in try block — never exits
+```
+
+**Return in finally — dangerous antipattern:**
+```java
+public int dangerous() {
+    try {
+        throw new RuntimeException("real problem");
+    } finally {
+        return 42;    // SWALLOWS the exception — exception is lost entirely
+    }
+}
+
+// Returns 42 silently — the RuntimeException is gone forever
+```
+
+**try-with-resources** (Java 7+) — automatic resource management:
+```java
+// Old way — error-prone
+Connection conn = null;
+try {
+    conn = dataSource.getConnection();
+    // use conn
+} catch (SQLException e) {
+    // handle
+} finally {
+    if (conn != null) {
+        try { conn.close(); }           // close can ALSO throw!
+        catch (SQLException ignored) {} // easy to suppress incorrectly
+    }
+}
+
+// try-with-resources — correct and clean
+try (Connection conn = dataSource.getConnection();
+     PreparedStatement ps = conn.prepareStatement(SQL)) {   // multiple resources
+    ps.executeUpdate();
+} catch (SQLException e) {
+    throw new DataAccessException("Query failed", e);
+}
+// conn and ps are BOTH closed in reverse order, even if exception occurs
+// close() exceptions are suppressed (accessible via e.getSuppressed())
+
+// Custom AutoCloseable
+public class ManagedResource implements AutoCloseable {
+    public ManagedResource() { System.out.println("opened"); }
+
+    public void use() { System.out.println("using"); }
+
+    @Override
+    public void close() {
+        System.out.println("closed");   // called automatically
+    }
+}
+
+try (ManagedResource r = new ManagedResource()) {
+    r.use();
+} // prints: opened → using → closed
+```
+
+**Suppressed exceptions — accessing close() failures:**
+```java
+try (ManagedResource r = new ManagedResource()) {
+    throw new RuntimeException("primary");
+    // r.close() throws — that exception is suppressed, not lost
+} catch (RuntimeException e) {
+    System.out.println("Primary: " + e.getMessage());
+    for (Throwable suppressed : e.getSuppressed()) {
+        System.out.println("Suppressed: " + suppressed.getMessage());
+    }
+}
+```
+
+**Common Pitfalls:**
+- Empty catch blocks — silently swallows exceptions, extremely dangerous in production
+- Catching `Throwable` — catches `Error` subtypes like `OutOfMemoryError`
+- `return` in `finally` — swallows exceptions
+- Forgetting to close resources without try-with-resources — resource leaks
+- Closing resources in wrong order manually (should be reverse open order)
+
+---
+
+### 3. throw vs throws
+
+**`throw`** — the statement that actually throws an exception instance:
+```java
+// throw an exception immediately
+throw new IllegalArgumentException("Value must be positive: " + value);
+
+// Always creates a new instance (or re-throws existing)
+throw new RuntimeException("wrapped", originalException);
+```
+
+**`throws`** — the declaration on a method signature that announces possible checked exceptions:
+```java
+// Method declares it may throw — callers must handle or propagate
+public void processFile(String path) throws IOException, ParseException {
+    // implementation
+}
+
+// Interface can declare throws — implementations must honor it
+public interface DataLoader {
+    Data load(String source) throws IOException;
+}
+```
+
+**Re-throwing exceptions:**
+```java
+try {
+    riskyOperation();
+} catch (IOException e) {
+    log.error("Failed", e);
+    throw e;                              // re-throw same exception — stack trace preserved
+}
+
+// Wrapping in higher-level exception (exception translation)
+try {
+    jdbcTemplate.query(SQL, mapper);
+} catch (DataAccessException e) {
+    throw new OrderRepositoryException("Failed to load orders", e);  // chain cause
+}
+
+// Java 7+ — re-throw with more specific type
+// Compiler is smart enough to know only IOException can reach this catch
+public void smart() throws IOException {
+    try {
+        throw new FileNotFoundException("file");
+    } catch (Exception e) {
+        throw e;                          // compiler allows — knows actual type is IOException
+    }
+}
+```
+
+**throws on overriding methods — the covariance rule:**
+```java
+public class Parent {
+    public void method() throws IOException {}
+}
+
+public class Child extends Parent {
+    // Can throw FEWER or MORE SPECIFIC checked exceptions
+    @Override
+    public void method() throws FileNotFoundException {}  // OK — more specific
+
+    // @Override
+    // public void method() throws Exception {}            // compile error — broader
+    // Cannot declare broader checked exceptions than parent
+}
+```
+
+**Common Pitfalls:**
+```java
+// Declaring unchecked in throws — legal but pointless/misleading
+public void method() throws NullPointerException {}   // adds nothing
+
+// throws clause is not enforced for RuntimeException — misleading to declare
+```
+
+---
+
+### 4. Custom Exceptions
+
+**Design principles:**
+- Extend `RuntimeException` for unchecked (preferred in modern Java)
+- Extend `Exception` for checked (when recovery is genuinely expected)
+- Always provide constructors for: message, cause, both, and neither
+- Add domain-specific fields for structured error information
+- Never just wrap an exception with no added value
+
+```java
+// Minimal correct custom exception
+public class InsufficientFundsException extends RuntimeException {
+
+    private final BigDecimal balance;
+    private final BigDecimal amount;
+
+    // Constructor: message only
+    public InsufficientFundsException(String message) {
+        super(message);
+        this.balance = null;
+        this.amount = null;
+    }
+
+    // Constructor: domain fields — most useful for callers
+    public InsufficientFundsException(BigDecimal balance, BigDecimal amount) {
+        super(String.format(
+            "Insufficient funds: balance=%.2f, required=%.2f", balance, amount
+        ));
+        this.balance = balance;
+        this.amount = amount;
+    }
+
+    // Constructor: message + cause — for wrapping
+    public InsufficientFundsException(String message, Throwable cause) {
+        super(message, cause);
+        this.balance = null;
+        this.amount = null;
+    }
+
+    // Constructor: all four — standard boilerplate
+    protected InsufficientFundsException(String message, Throwable cause,
+                                          boolean enableSuppression,
+                                          boolean writableStackTrace) {
+        super(message, cause, enableSuppression, writableStackTrace);
+        this.balance = null;
+        this.amount = null;
+    }
+
+    public BigDecimal getBalance() { return balance; }
+    public BigDecimal getAmount()  { return amount; }
+}
+
+// Usage
+if (account.getBalance().compareTo(amount) < 0) {
+    throw new InsufficientFundsException(account.getBalance(), amount);
+}
+
+// Caller can extract structured data
+catch (InsufficientFundsException e) {
+    log.warn("Payment declined: balance={}, required={}", e.getBalance(), e.getAmount());
+    return PaymentResult.declined("Insufficient funds");
+}
+```
+
+**Exception hierarchy for a domain:**
+```java
+// Root domain exception — catch-all for the domain
+public class OrderException extends RuntimeException {
+    public OrderException(String message)                  { super(message); }
+    public OrderException(String message, Throwable cause) { super(message, cause); }
+}
+
+// Specific subtypes
+public class OrderNotFoundException extends OrderException {
+    private final String orderId;
+    public OrderNotFoundException(String orderId) {
+        super("Order not found: " + orderId);
+        this.orderId = orderId;
+    }
+    public String getOrderId() { return orderId; }
+}
+
+public class OrderAlreadyShippedException extends OrderException {
+    public OrderAlreadyShippedException(String orderId) {
+        super("Cannot modify shipped order: " + orderId);
+    }
+}
+
+public class InvalidOrderStateException extends OrderException {
+    private final OrderStatus current;
+    private final OrderStatus required;
+
+    public InvalidOrderStateException(OrderStatus current, OrderStatus required) {
+        super(String.format("Invalid state: expected %s but was %s", required, current));
+        this.current  = current;
+        this.required = required;
+    }
+    // getters...
+}
+
+// Layered catching in a controller
+try {
+    orderService.ship(orderId);
+} catch (OrderNotFoundException e) {
+    return ResponseEntity.notFound().build();
+} catch (OrderAlreadyShippedException e) {
+    return ResponseEntity.status(409).body(e.getMessage());
+} catch (OrderException e) {
+    return ResponseEntity.badRequest().body(e.getMessage()); // catch-all for domain
+}
+```
+
+**When NOT to create a custom exception:**
+- If `IllegalArgumentException`, `IllegalStateException`, or `UnsupportedOperationException` already expresses the intent
+- If the exception will only be thrown in one place and caught generically
+- If you're just adding a different name with no new information
+
+**Common Pitfalls:**
+```java
+// Anti-pattern: exception with no added value
+public class MyException extends RuntimeException {
+    public MyException(String msg) { super(msg); }
+}
+// Just use IllegalStateException directly
+
+// Anti-pattern: losing the cause
+try {
+    somethingRisky();
+} catch (IOException e) {
+    throw new ServiceException("Failed"); // original cause LOST — never do this
+}
+// Correct:
+throw new ServiceException("Failed", e); // chain the cause
+```
+
+---
+
+### 5. Exception Propagation
+
+**Call stack unwinding:**
+```
+main()
+  └── orderService.placeOrder()
+        └── paymentService.charge()
+              └── bankClient.transfer()
+                    └── throws IOException  ← thrown here
+```
+
+If `bankClient.transfer()` throws and no method in the chain catches it, the exception unwinds through each frame until caught or the thread terminates.
+
+```java
+// Propagation through layers
+public class BankClient {
+    public void transfer(BigDecimal amount) throws IOException {
+        // network call throws
+        throw new IOException("Network timeout");
+    }
+}
+
+public class PaymentService {
+    public void charge(Order order) throws IOException {
+        bankClient.transfer(order.getTotal());  // propagates up
+    }
+}
+
+public class OrderService {
+    public void placeOrder(Order order) {
+        try {
+            paymentService.charge(order);
+        } catch (IOException e) {
+            // Exception translation — convert technical to domain exception
+            throw new PaymentFailedException("Payment processing failed", e);
+        }
+    }
+}
+```
+
+**Exception translation — the critical pattern:**
+```java
+// WRONG — leaks implementation detail (SQLException) into domain layer
+public Order findOrder(String id) throws SQLException {
+    return jdbcTemplate.queryForObject(SQL, orderMapper, id);
+}
+
+// CORRECT — translate to domain exception, preserve cause
+public Order findOrder(String id) {
+    try {
+        return jdbcTemplate.queryForObject(SQL, orderMapper, id);
+    } catch (EmptyResultDataAccessException e) {
+        throw new OrderNotFoundException(id);              // domain exception
+    } catch (DataAccessException e) {
+        throw new OrderRepositoryException("DB error", e); // cause preserved
+    }
+}
+```
+
+**Exception tunneling — bypassing checked exception restriction:**
+```java
+// Sometimes you need to throw a checked exception through an interface
+// that doesn't declare it (e.g., Runnable, Callable, streams)
+
+// Option 1: Wrap in RuntimeException (most common)
+public void run() {
+    try {
+        doCheckedWork();
+    } catch (IOException e) {
+        throw new UncheckedIOException(e);   // JDK built-in wrapper for IOException
+        // OR: throw new RuntimeException(e);
+    }
+}
+
+// Option 2: Sneaky throw (advanced — use with extreme caution)
+// Exploits type erasure to throw checked as unchecked — bypasses compiler
+@SuppressWarnings("unchecked")
+public static <T extends Throwable> void sneakyThrow(Throwable t) throws T {
+    throw (T) t;
+}
+
+// Option 3: Lombok @SneakyThrows (does the above under the hood)
+@SneakyThrows(IOException.class)
+public void method() {
+    Files.readString(Path.of("file.txt")); // IOException thrown without declaration
+}
+```
+
+**Thread boundaries — exceptions don't cross threads:**
+```java
+// Exception thrown in a thread does NOT propagate to the spawning thread
+Thread t = new Thread(() -> {
+    throw new RuntimeException("thread exception");
+});
+t.setUncaughtExceptionHandler((thread, ex) -> {
+    log.error("Thread {} failed: {}", thread.getName(), ex.getMessage());
+});
+t.start();
+
+// With CompletableFuture — exceptions are captured and re-thrown on get()
+CompletableFuture<String> future = CompletableFuture.supplyAsync(() -> {
+    throw new RuntimeException("async failure");
+});
+
+try {
+    future.get();
+} catch (ExecutionException e) {
+    Throwable cause = e.getCause();     // unwrap to get original exception
+    log.error("Async task failed", cause);
+}
+
+// exceptionally — handle inline
+future.exceptionally(ex -> {
+    log.error("Failed", ex);
+    return "fallback";
+});
+```
+
+---
+
+### 6. Best Practices
+
+**1. Be specific — catch the most specific exception possible:**
+```java
+// BAD — too broad, hides bugs
+try {
+    processOrder(order);
+} catch (Exception e) {
+    log.error("Error", e);
+}
+
+// GOOD — specific, intentional
+try {
+    processOrder(order);
+} catch (OrderNotFoundException e) {
+    return notFound(e.getOrderId());
+} catch (InsufficientFundsException e) {
+    return paymentDeclined(e);
+}
+```
+
+**2. Never swallow exceptions silently:**
+```java
+// WORST POSSIBLE CODE — exception disappears without trace
+try {
+    criticalOperation();
+} catch (Exception e) {
+    // empty — exception swallowed, never do this
+}
+
+// Minimum: log it
+} catch (Exception e) {
+    log.error("criticalOperation failed", e);  // always pass exception object to logger
+}
+```
+
+**3. Always preserve the cause chain:**
+```java
+// BAD — cause lost forever
+throw new ServiceException("Failed");
+
+// BAD — cause lost even though caught
+catch (IOException e) {
+    throw new ServiceException("Failed: " + e.getMessage()); // string only, not cause
+}
+
+// GOOD — full chain preserved
+throw new ServiceException("Failed", e);
+```
+
+**4. Include context in the message:**
+```java
+// BAD — no context
+throw new IllegalArgumentException("Invalid input");
+
+// GOOD — actionable message with context
+throw new IllegalArgumentException(
+    String.format("Age must be between 0 and 150, got: %d", age)
+);
+
+throw new OrderNotFoundException(
+    "Order not found for id=" + orderId + ", userId=" + userId
+);
+```
+
+**5. Use try-with-resources for everything AutoCloseable:**
+```java
+// Always — files, connections, streams, HTTP clients
+try (var conn = dataSource.getConnection();
+     var ps   = conn.prepareStatement(sql)) {
+    return ps.executeQuery();
+}
+```
+
+**6. Don't use exceptions for flow control:**
+```java
+// BAD — exceptions as control flow (extremely expensive — stack trace construction)
+public boolean isValidUser(String id) {
+    try {
+        userRepository.findById(id);
+        return true;
+    } catch (UserNotFoundException e) {
+        return false;
+    }
+}
+
+// GOOD — use Optional or explicit check
+public boolean isValidUser(String id) {
+    return userRepository.existsById(id);
+}
+
+// GOOD — Optional
+public Optional<User> findUser(String id) {
+    return userRepository.findById(id); // returns Optional.empty() if not found
+}
+```
+
+**7. Exception logging — log once, at the right level:**
+```java
+// BAD — logged at multiple layers, creates noise
+catch (IOException e) {
+    log.error("Error in service", e);  // logs here
+    throw new ServiceException("Failed", e); // and re-throws, logged again up the chain
+}
+
+// GOOD — log at the boundary where it's caught for the last time
+// Lower layers: wrap and rethrow without logging
+catch (IOException e) {
+    throw new ServiceException("Failed", e); // no logging — let it propagate
+
+// At the top (controller/handler): log once
+catch (ServiceException e) {
+    log.error("Request processing failed for user={}", userId, e); // log once, at boundary
+    return serverError(e);
+}
+```
+
+**8. Null safety — prefer NPE prevention over catching:**
+```java
+// BAD — NullPointerException is a programming error, not a condition to handle
+try {
+    return user.getAddress().getCity();
+} catch (NullPointerException e) {
+    return "Unknown";
+}
+
+// GOOD — explicit null checks or Optional
+return Optional.ofNullable(user)
+               .map(User::getAddress)
+               .map(Address::getCity)
+               .orElse("Unknown");
+```
+
+**9. Document exceptions in Javadoc:**
+```java
+/**
+ * Transfers funds between accounts.
+ *
+ * @param from source account ID
+ * @param to   destination account ID
+ * @param amount amount to transfer, must be positive
+ * @throws IllegalArgumentException if amount is not positive
+ * @throws AccountNotFoundException if either account does not exist
+ * @throws InsufficientFundsException if source account has insufficient balance
+ */
+public void transfer(String from, String to, BigDecimal amount) {
+    // ...
+}
+```
+
+---
+
+## Interview Questions
+
+**Q1: What is the difference between checked and unchecked exceptions? When do you use each?**
+
+Checked exceptions extend `Exception` (but not `RuntimeException`) and require the compiler to enforce handling — the caller must either catch or declare them with `throws`. Unchecked exceptions extend `RuntimeException` or `Error` and have no compiler enforcement. Use checked when the caller can realistically recover from the condition and it's outside the program's control — file not found, network timeout, SQL failure. Use unchecked for programming errors — invalid arguments, violated contracts, null where not expected. Modern best practice (reflected in Spring and most frameworks) leans toward unchecked because checked exceptions break functional interfaces, create layered leakage, and often get swallowed anyway. The guiding question: "Can the caller reasonably recover from this?" If yes, consider checked. If it's a programming mistake, always unchecked.
+
+---
+
+**Q2: Explain `finally` — when does it NOT execute?**
+
+`finally` executes after `try` completes (normally or via exception) and after any matching `catch` block. It executes even when there's a `return` in the `try` or `catch` — the JVM saves the return value, runs `finally`, then returns. The three cases where `finally` does NOT execute: (1) `System.exit()` is called — JVM terminates immediately. (2) The JVM itself crashes or is killed at the OS level. (3) The thread is stuck in an infinite loop or deadlock inside `try` — it never exits. Important: a `return` statement in `finally` overrides any return value or pending exception from `try`/`catch` — this is a dangerous antipattern that silently swallows exceptions.
+
+---
+
+**Q3: What is try-with-resources and how does it handle exceptions from `close()`?**
+
+`try-with-resources` (Java 7+) automatically closes any `AutoCloseable` resources declared in the `try` header when the block exits, whether normally or exceptionally. Resources are closed in reverse declaration order. If the `try` body throws and `close()` also throws, the `close()` exception is **suppressed** — added to the primary exception via `addSuppressed()` and accessible via `e.getSuppressed()`. The primary exception is NOT lost. This is superior to the old manual `finally` approach, where a `close()` exception in `finally` would completely replace and lose the original exception. Multiple resources can be declared, and all are guaranteed to close.
+
+---
+
+**Q4: What is exception chaining and why is it important?**
+
+Exception chaining (also called exception wrapping or translation) preserves the original cause when converting a lower-level exception to a higher-level one. Every `Throwable` constructor accepts a `cause` parameter. Critically important because: (1) it preserves the full stack trace from root cause to surface, (2) it enables exception translation without losing debugging information, and (3) it maintains layer separation while still allowing post-mortem diagnosis. The anti-pattern is `throw new HighLevelException("Failed")` — the original `IOException` or `SQLException` cause is gone forever. Always: `throw new HighLevelException("Failed", originalException)`. The full chain is printed by `printStackTrace()` and logged by SLF4J when you pass the exception as the last logger argument.
+
+---
+
+**Q5: What happens when an exception is thrown in a `finally` block?**
+
+If an exception is thrown in `finally`, it replaces any exception that was in flight from the `try` or `catch` block — the original exception is **completely lost**. This is one of Java's dangerous edge cases. Example: if `try` throws `IOException` and `finally` throws `RuntimeException`, the caller sees only the `RuntimeException`. The `IOException` disappears. This is why you should never throw from `finally`, and why try-with-resources is safer — it suppresses `close()` exceptions rather than replacing the primary one.
+
+---
+
+**Q6: What is the difference between `throw e` and `throw new Exception(e)` when re-throwing?**
+
+`throw e` re-throws the exact same exception instance — the original stack trace is preserved entirely. The caller sees exactly where the exception originally occurred. `throw new Exception(e)` creates a new exception wrapping the original as a cause — this adds a new stack frame at the wrapping point, which is correct when doing exception translation (changing exception type). However, it also loses the original exception type. When you want to re-throw the same type with the same trace, use `throw e`. When translating exceptions across abstraction layers, use `throw new DomainException("message", e)`. Java 7+ also allows smarter re-throws: if you catch `Exception` but only `IOException` can be thrown in the `try`, you can re-throw as `IOException` without wrapping.
+
+---
+
+**Q7: Can you catch `Error`? Should you?**
+
+Technically yes — `Error` extends `Throwable` so `catch (Error e)` compiles. You should almost never catch `Error`. `OutOfMemoryError`, `StackOverflowError`, and `VirtualMachineError` indicate the JVM is in an unrecoverable state — attempting to handle them is likely to make things worse. Legitimate exceptions: frameworks and application servers sometimes catch `OutOfMemoryError` to log diagnostics and attempt graceful shutdown. Thread pool executors catch `Throwable` to prevent thread death. JUnit catches `AssertionError` (which extends `Error`) to report test failures. If you do catch `Error`, your only reasonable responses are logging and (at most) attempting graceful shutdown — never try to continue normal operation.
+
+---
+
+**Q8: Why is catching `Exception` or `Throwable` considered a bad practice?**
+
+Catching `Exception` catches all checked and unchecked exceptions — including programming errors like `NullPointerException` and `ClassCastException` that indicate bugs. This hides bugs that should surface and be fixed. Catching `Throwable` also catches `Error` subclasses including `OutOfMemoryError`. The problems: (1) bugs are silently swallowed instead of surfacing as crashes that prompt fixing, (2) impossible to take appropriate action — different exceptions require different responses, (3) code becomes impossible to reason about — any method call could throw anything and it's all handled the same way. Acceptable uses: top-level framework handlers, `UncaughtExceptionHandler`, and monitoring/logging infrastructure — always log the full exception and only for the purpose of last-resort handling or diagnostics.
+
+---
+
+**Q9: How do exceptions work across thread boundaries?**
+
+Exceptions thrown in one thread do NOT propagate to other threads — each thread has its own call stack. If an exception goes uncaught in a thread, it terminates that thread and invokes the thread's `UncaughtExceptionHandler` (or the default one if not set). With `Future`/`ExecutorService`: exceptions are captured and wrapped in `ExecutionException`, re-thrown when `future.get()` is called on the submitting thread. With `CompletableFuture`: exceptions are captured and can be handled with `exceptionally()`, `handle()`, or `whenComplete()`. With virtual threads (Java 21+): same semantics — exceptions are contained within the virtual thread unless explicitly propagated via `Future` or shared state.
+
+---
+
+**Q10: What is exception translation and when should you apply it?**
+
+Exception translation is converting a lower-level exception into a higher-level one appropriate to the current abstraction layer. Apply it at every layer boundary: when a `SQLException` from JDBC would leak into the service layer, translate it to a domain exception like `OrderRepositoryException`. Principles: (1) always preserve the cause — `throw new DomainException("msg", cause)`, (2) translate at the boundary, not deep inside — the repository layer translates JDBC exceptions, not the service layer, (3) choose the right level of specificity — not everything needs a unique exception type. Never translate by wrapping with the same exception type and no added information — that adds noise without value.
+
+---
+
+**Q11: How would you design exception handling for a REST API?**
+
+Use a global exception handler (`@ControllerAdvice` in Spring) to centralize HTTP response mapping. Define a domain exception hierarchy with a base exception. Map exceptions to HTTP status codes in one place. Include structured error responses with consistent fields (code, message, details). Log with appropriate severity — 4xx errors at WARN (client mistakes), 5xx at ERROR (server failures). Never expose stack traces or internal details in responses. Example structure:
+```java
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    @ExceptionHandler(EntityNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNotFound(EntityNotFoundException e) {
+        return ResponseEntity.status(404).body(new ErrorResponse("NOT_FOUND", e.getMessage()));
+    }
+    @ExceptionHandler(ValidationException.class)
+    public ResponseEntity<ErrorResponse> handleValidation(ValidationException e) {
+        return ResponseEntity.status(400).body(new ErrorResponse("VALIDATION_ERROR", e.getMessage()));
+    }
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleGeneral(Exception e) {
+        log.error("Unhandled exception", e);
+        return ResponseEntity.status(500).body(new ErrorResponse("INTERNAL_ERROR", "An error occurred"));
+    }
+}
+```
+
+---
+
+**Q12: What is the performance cost of exceptions?**
+
+Creating an exception is expensive primarily because of **stack trace capture** — `fillInStackTrace()` walks the entire call stack to record it, costing tens of microseconds. Throwing and catching itself is relatively cheap. This is why using exceptions for flow control (e.g., catching `NumberFormatException` to detect non-numeric strings) is a performance antipattern in hot paths. For high-frequency paths, prefer explicit checks (`if (str.matches("\\d+"))`) or `Optional`-returning methods. You can override `fillInStackTrace()` and return `this` to create zero-cost exception instances for cases where the stack trace has no value — sometimes done for sentinel exceptions in internal APIs. `new RuntimeException("msg") { @Override public Throwable fillInStackTrace() { return this; } }`.
+
+---
+
+**Q13: What is the problem with `throws Exception` or `throws Throwable` in method signatures?**
+
+It defeats the entire purpose of checked exceptions. Callers are forced to handle `Exception` — but they can't know what specific exceptions to expect, so they either catch `Exception` broadly (hiding bugs) or declare `throws Exception` themselves, propagating the problem. It conveys zero information about what can actually go wrong. It prevents callers from writing specific recovery logic. It poisons the call chain — every caller must declare `throws Exception`. Better alternatives: declare specific checked exceptions, use unchecked exceptions for things callers can't recover from, or use a domain base exception class so callers can at least catch by domain boundary.
+
+---
+
+**Q14: Explain the `InterruptedException` handling contract.**
+
+`InterruptedException` is thrown when a thread is interrupted while blocked (in `sleep`, `wait`, `join`, etc.). The critical rule: **never swallow it silently**. When you catch `InterruptedException`, you must either: (1) re-throw it — the cleanest option if your method signature allows, (2) restore the interrupt flag — `Thread.currentThread().interrupt()` — if you can't propagate it (e.g., inside `Runnable.run()`). Swallowing it (`catch (InterruptedException e) {}`) suppresses the interrupt signal, potentially preventing the thread from shutting down properly. This is especially important in thread pool tasks, where the pool uses interrupts for task cancellation and shutdown.
+
+---
+
+**Q15: What are suppressed exceptions and when do they occur?**
+
+Suppressed exceptions occur in try-with-resources when both the `try` body and the `close()` method throw exceptions. The `close()` exception is added to the primary exception (from the `try` body) via `addSuppressed()` rather than replacing it. The primary exception propagates normally, and suppressed exceptions are accessible via `primaryException.getSuppressed()`. This was introduced in Java 7 specifically to solve the problem with the old manual `finally` pattern, where a `close()` exception in `finally` would completely replace and lose the original exception. You can also manually add suppressed exceptions: `primaryException.addSuppressed(secondaryException)` — useful in custom resource management code that orchestrates multiple closeable resources.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+### Exception Handling in Reactive / Async Code
+```java
+// Project Reactor — exceptions in reactive pipelines
+Mono<Order> order = orderService.findById(id)
+    .onErrorMap(DataAccessException.class,
+                e -> new OrderRepositoryException("DB error", e))
+    .onErrorReturn(OrderNotFoundException.class, Order.empty())
+    .doOnError(e -> log.error("Order fetch failed for id={}", id, e));
+
+// CompletableFuture — structured exception handling
+CompletableFuture.supplyAsync(() -> orderService.findById(id))
+    .thenApply(order -> enrichOrder(order))
+    .exceptionally(ex -> {
+        Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
+        if (cause instanceof OrderNotFoundException) return Order.empty();
+        throw new CompletionException(cause);
+    })
+    .handle((result, ex) -> ex == null ? result : fallbackOrder());
+```
+
+### Structured Logging of Exceptions
+```java
+// Pass exception as last argument — SLF4J logs full stack trace
+log.error("Order processing failed for orderId={}, userId={}", orderId, userId, e);
+
+// NOT this — loses stack trace
+log.error("Order processing failed: " + e.getMessage());
+
+// MDC for correlation
+MDC.put("correlationId", request.getCorrelationId());
+try {
+    processRequest(request);
+} catch (Exception e) {
+    log.error("Request failed", e);  // correlationId in MDC adds context
+    throw e;
+} finally {
+    MDC.clear();
+}
+```
+
+### Design Patterns for Exception Handling
+
+**Result type pattern** — avoid exceptions for expected failures:
+```java
+public sealed interface Result<T> permits Result.Success, Result.Failure {
+    record Success<T>(T value) implements Result<T> {}
+    record Failure<T>(String code, String message, Throwable cause) implements Result<T> {}
+
+    static <T> Result<T> success(T value)          { return new Success<>(value); }
+    static <T> Result<T> failure(String code, String msg) { return new Failure<>(code, msg, null); }
+
+    default boolean isSuccess()    { return this instanceof Success; }
+    default T getValue()           { return ((Success<T>) this).value(); }
+}
+
+// Usage — no exceptions in normal flow
+Result<Order> result = orderService.placeOrder(request);
+if (result.isSuccess()) {
+    return ResponseEntity.ok(result.getValue());
+} else {
+    Result.Failure<Order> failure = (Result.Failure<Order>) result;
+    return ResponseEntity.badRequest().body(failure.message());
+}
+```
+
+### Integration Considerations
+- **Spring `@Transactional`**: rolls back on `RuntimeException` by default; checked exceptions do NOT trigger rollback unless `rollbackFor` is specified — a common source of data integrity bugs
+- **Spring `@Retryable`**: catches specified exceptions and retries — works best with unchecked
+- **Hibernate**: wraps all exceptions in `HibernateException` (unchecked) — important for transaction management
+- **Kafka consumers**: uncaught exceptions in `@KafkaListener` affect offset commit behavior
+- **gRPC**: exceptions map to `Status` codes — use `StatusRuntimeException`
+
+---
+
+## Summary / Cheat Sheet
+
+```
+HIERARCHY:
+─────────────────────────────────────────────────────────
+Throwable
+├── Error           — JVM unrecoverable, never catch
+└── Exception
+      ├── IOException, SQLException  — checked
+      └── RuntimeException           — unchecked (NPE, IAE, ISE...)
+
+CHECKED vs UNCHECKED:
+─────────────────────────────────────────────────────────
+Checked   → caller CAN recover, outside program control → IOException
+Unchecked → programming error OR cannot recover         → NullPointerException
+
+CATCH ORDER:
+─────────────────────────────────────────────────────────
+Always: specific → general
+FileNotFoundException → IOException → Exception (never reversed)
+
+FINALLY GUARANTEES:
+─────────────────────────────────────────────────────────
+Always runs EXCEPT: System.exit(), JVM crash, infinite loop
+return in finally: SWALLOWS exceptions — never do this
+try-with-resources: close() exceptions are SUPPRESSED, not lost
+
+BEST PRACTICES:
+─────────────────────────────────────────────────────────
+✅ Catch specific exceptions
+✅ Always preserve cause: throw new Ex("msg", originalCause)
+✅ Include context in messages (IDs, values, state)
+✅ Use try-with-resources for AutoCloseable
+✅ Log once — at the boundary where it's handled
+✅ Pass exception object to logger: log.error("msg", e)
+✅ Restore interrupt flag: Thread.currentThread().interrupt()
+
+❌ Never swallow exceptions silently
+❌ Never catch Exception/Throwable broadly (except top-level handlers)
+❌ Never throw from finally
+❌ Never use exceptions for flow control in hot paths
+❌ Never lose the cause chain
+❌ Never catch Error in business logic
+
+CUSTOM EXCEPTIONS:
+─────────────────────────────────────────────────────────
+Extend RuntimeException (default modern choice)
+Provide: (String msg), (String msg, Throwable cause) constructors
+Add domain fields (orderId, userId, state) for structured handling
+Build a hierarchy: DomainException → specific subtypes
+
+EXCEPTION TRANSLATION (layer boundaries):
+─────────────────────────────────────────────────────────
+Repository  : SQLException  → DataAccessException
+Service     : DataAccess    → DomainException
+Controller  : Domain        → HTTP status code
+
+PERFORMANCE:
+─────────────────────────────────────────────────────────
+Stack trace construction is expensive (~microseconds)
+Never use exceptions for control flow in hot loops
+Override fillInStackTrace() → return this for sentinel exceptions
+```
+
+# Java I/O & NIO — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+Java I/O (Input/Output) is the subsystem for reading and writing data between a program and external sources — files, networks, memory, and inter-process pipes. Java has two generations: the original **java.io** (blocking, stream-oriented, Java 1.0) and **java.nio** (non-blocking, buffer-oriented, Java 1.4), with NIO.2 (Java 7) adding a modern file system API.
+
+**Why it matters:**
+- Every real application touches I/O — files, databases, HTTP, message queues
+- I/O is almost always the performance bottleneck — wrong choices cause catastrophic throughput problems
+- Resource leaks from unclosed streams are a leading cause of production outages
+- Understanding the abstraction levels (byte → character → buffered → channel → memory-mapped) enables choosing the right tool for each workload
+
+**Real-world applications:**
+- Log file processing → `BufferedReader` line-by-line or NIO `Files.lines()`
+- Image/video upload → byte streams with buffering
+- Large CSV/JSON import → `BufferedReader` + streaming parse (Jackson `JsonParser`)
+- Network server handling thousands of connections → `java.nio` `Selector` + `Channel`
+- Memory-mapped files for IPC or large binary data → `MappedByteBuffer`
+- Config file watching → `WatchService`
+- Object persistence to disk → Serialization or Externalization
+
+---
+
+## Core Concepts
+
+- **Stream** — a sequential flow of data; one-directional, one-time-read
+- **Byte stream** — raw 8-bit data; handles any binary content
+- **Character stream** — 16-bit Unicode; handles text with charset encoding/decoding
+- **Buffering** — accumulates data in memory before I/O syscalls, dramatically reducing OS overhead
+- **Channel** — NIO abstraction; bidirectional, can be non-blocking, works with `Buffer`
+- **Buffer** — fixed-capacity memory block; NIO reads/writes go through it
+- **Selector** — multiplexes multiple non-blocking channels on a single thread
+- **Path** — NIO.2 replacement for `File`; immutable, OS-independent path representation
+- **Decorator pattern** — Java I/O is built on it; streams wrap other streams to add capability
+
+---
+
+## Architecture Overview
+
+```
+                        JAVA I/O HIERARCHY
+─────────────────────────────────────────────────────────────
+BYTE STREAMS                        CHARACTER STREAMS
+InputStream                         Reader
+├── FileInputStream                 ├── FileReader
+├── ByteArrayInputStream            ├── CharArrayReader
+├── FilterInputStream               ├── InputStreamReader  ← bridge
+│   ├── BufferedInputStream         └── BufferedReader
+│   ├── DataInputStream
+│   └── ObjectInputStream  ← serialization
+└── PipedInputStream
+
+OutputStream                        Writer
+├── FileOutputStream                ├── FileWriter
+├── ByteArrayOutputStream           ├── CharArrayWriter
+├── FilterOutputStream              ├── OutputStreamWriter ← bridge
+│   ├── BufferedOutputStream        ├── BufferedWriter
+│   ├── DataOutputStream            └── PrintWriter
+│   └── ObjectOutputStream
+└── PipedOutputStream
+
+─────────────────────────────────────────────────────────────
+                        NIO HIERARCHY
+─────────────────────────────────────────────────────────────
+Buffer (abstract)                   Channel (interface)
+├── ByteBuffer                      ├── FileChannel
+├── CharBuffer                      ├── SocketChannel
+├── IntBuffer                       ├── ServerSocketChannel
+├── LongBuffer                      └── DatagramChannel
+├── FloatBuffer
+└── DoubleBuffer
+
+Selector ──── SelectionKey ──── Channel (non-blocking)
+
+─────────────────────────────────────────────────────────────
+                    NIO.2 FILE SYSTEM API
+─────────────────────────────────────────────────────────────
+Path / Paths / Files / FileSystem / WatchService
+```
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. File Handling — java.io.File vs java.nio.file.Path
+
+**`java.io.File` (legacy):**
+```java
+File file = new File("/data/config.txt");
+
+// Basic operations
+boolean exists  = file.exists();
+boolean isFile  = file.isFile();
+boolean isDir   = file.isDirectory();
+long length     = file.length();         // size in bytes
+long modified   = file.lastModified();   // epoch millis
+String name     = file.getName();        // "config.txt"
+String parent   = file.getParent();      // "/data"
+String absPath  = file.getAbsolutePath();
+
+// Directory operations
+File dir = new File("/data/output");
+dir.mkdir();                             // creates single directory
+dir.mkdirs();                            // creates full path including parents
+String[] children = dir.list();          // filenames only
+File[]   files    = dir.listFiles();     // File objects
+
+// Problems with File:
+// - Many methods return false on failure instead of throwing
+// - No symlink support
+// - list() returns null (not empty array) if not a directory or I/O error
+// - No atomic move, no file attributes, limited metadata
+```
+
+**`java.nio.file.Path` (NIO.2, Java 7+) — always prefer this:**
+```java
+import java.nio.file.*;
+import java.nio.file.attribute.*;
+
+Path path = Path.of("/data/config.txt");        // Java 11+
+Path path = Paths.get("/data", "config.txt");   // Java 7+
+
+// Path operations — purely string manipulation, no I/O
+Path parent   = path.getParent();               // /data
+Path filename = path.getFileName();             // config.txt
+Path root     = path.getRoot();                 // /
+Path absolute = path.toAbsolutePath();
+Path normal   = path.normalize();               // resolves .. and .
+Path relative = path.relativize(other);
+Path resolved = path.resolve("subdir/file.txt");// append
+boolean starts = path.startsWith("/data");
+
+// Convert
+File legacyFile = path.toFile();                // interop
+URI uri         = path.toUri();
+
+// Files utility class — the main API for actual I/O operations
+boolean exists = Files.exists(path);
+boolean isDir  = Files.isDirectory(path);
+long size      = Files.size(path);
+
+// Create
+Files.createFile(path);                         // throws if exists
+Files.createDirectory(path);                    // single level
+Files.createDirectories(path);                  // full path, no-op if exists
+
+// Copy and move
+Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING,
+                       StandardCopyOption.COPY_ATTRIBUTES);
+Files.move(src, dest, StandardCopyOption.ATOMIC_MOVE);   // atomic on supported FS
+
+// Delete
+Files.delete(path);                             // throws NoSuchFileException if absent
+Files.deleteIfExists(path);                     // safe — no exception if absent
+
+// Attributes
+BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+attrs.creationTime();
+attrs.lastModifiedTime();
+attrs.size();
+attrs.isSymbolicLink();
+
+// Symbolic links
+Path symlink = Path.of("/tmp/link");
+Files.createSymbolicLink(symlink, path);
+Path realPath = symlink.toRealPath();           // resolves all symlinks
+```
+
+**Directory traversal:**
+```java
+// List immediate children
+try (Stream<Path> entries = Files.list(path)) {
+    entries.filter(Files::isRegularFile)
+           .forEach(System.out::println);
+}
+
+// Recursive walk — depth-first
+try (Stream<Path> walk = Files.walk(path, FileVisitOption.FOLLOW_LINKS)) {
+    walk.filter(p -> p.toString().endsWith(".java"))
+        .forEach(System.out::println);
+}
+
+// Pattern-based glob matching
+try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "*.{txt,csv}")) {
+    for (Path entry : stream) {
+        System.out.println(entry);
+    }
+}
+
+// FileVisitor — full control with callbacks
+Files.walkFileTree(path, new SimpleFileVisitor<>() {
+    @Override
+    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+        System.out.println("File: " + file);
+        return FileVisitResult.CONTINUE;
+    }
+
+    @Override
+    public FileVisitResult visitFileFailed(Path file, IOException exc) {
+        System.err.println("Failed: " + file + " — " + exc.getMessage());
+        return FileVisitResult.CONTINUE;  // skip problem files
+    }
+
+    @Override
+    public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+        if (dir.getFileName().toString().equals(".git")) {
+            return FileVisitResult.SKIP_SUBTREE;  // skip .git directories
+        }
+        return FileVisitResult.CONTINUE;
+    }
+});
+```
+
+---
+
+### 2. Byte Streams vs Character Streams
+
+**Byte streams** — raw binary data, 8 bits at a time:
+```java
+// Reading binary file — always use byte streams for non-text
+try (InputStream in = new FileInputStream("image.png")) {
+    byte[] buffer = new byte[8192];
+    int bytesRead;
+    while ((bytesRead = in.read(buffer)) != -1) {
+        process(buffer, 0, bytesRead);  // bytesRead may be < buffer.length
+    }
+}
+
+// Writing binary
+try (OutputStream out = new FileOutputStream("output.bin")) {
+    out.write(new byte[]{0x89, 0x50, 0x4E, 0x47}); // PNG header bytes
+    out.flush();
+}
+
+// Copy pattern
+try (InputStream in  = new FileInputStream(src);
+     OutputStream out = new FileOutputStream(dest)) {
+    in.transferTo(out);  // Java 9+ — built-in efficient copy
+}
+// Or use Files.copy() — even simpler
+Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING);
+```
+
+**Character streams** — text data with encoding:
+```java
+// FileReader uses platform default charset — AVOID
+Reader bad = new FileReader("file.txt"); // charset depends on OS — non-portable
+
+// Always specify charset explicitly
+try (Reader reader = new InputStreamReader(
+        new FileInputStream("file.txt"), StandardCharsets.UTF_8)) {
+    char[] buffer = new char[4096];
+    int charsRead;
+    while ((charsRead = reader.read(buffer)) != -1) {
+        String chunk = new String(buffer, 0, charsRead);
+    }
+}
+
+// OutputStreamWriter — specify charset
+try (Writer writer = new OutputStreamWriter(
+        new FileOutputStream("output.txt"), StandardCharsets.UTF_8)) {
+    writer.write("Hello, 世界");
+    writer.write(System.lineSeparator());
+}
+```
+
+**Bridge classes — converting byte ↔ character streams:**
+```java
+// InputStreamReader: InputStream → Reader
+// OutputStreamWriter: OutputStream → Writer
+// These are the ONLY correct way to cross the byte/char boundary
+
+InputStream rawStream = socket.getInputStream();
+Reader textReader = new InputStreamReader(rawStream, StandardCharsets.UTF_8);
+
+// Wrapping chain (decorator pattern):
+// FileInputStream → InputStreamReader → BufferedReader
+BufferedReader br = new BufferedReader(
+    new InputStreamReader(
+        new FileInputStream("data.txt"),
+        StandardCharsets.UTF_8
+    )
+);
+```
+
+**Key rule:** Use byte streams for binary data (images, audio, serialized objects, encrypted data). Use character streams for text, always specifying charset explicitly — never rely on platform default.
+
+---
+
+### 3. Buffered Streams
+
+**Why buffering matters:**
+Each unbuffered `read()` / `write()` call on a `FileInputStream` triggers a system call — expensive context switch between user space and kernel space. Buffering accumulates data, reducing syscalls from potentially millions to thousands.
+
+```java
+// Unbuffered — one syscall per byte read — catastrophically slow for large files
+try (InputStream in = new FileInputStream("large.bin")) {
+    int b;
+    while ((b = in.read()) != -1) {  // system call per byte!
+        process((byte) b);
+    }
+}
+
+// Buffered — reads 8KB chunks from OS, serves bytes from memory
+try (InputStream in = new BufferedInputStream(
+        new FileInputStream("large.bin"), 65536)) {  // 64KB buffer
+    int b;
+    while ((b = in.read()) != -1) {  // served from memory buffer
+        process((byte) b);
+    }
+}
+
+// Even better — read into your own buffer
+try (InputStream in = new BufferedInputStream(new FileInputStream("large.bin"))) {
+    byte[] buf = new byte[8192];
+    int n;
+    while ((n = in.read(buf)) != -1) {
+        process(buf, 0, n);
+    }
+}
+```
+
+**BufferedReader/Writer — text with line support:**
+```java
+// Reading text line by line
+try (BufferedReader br = new BufferedReader(
+        new InputStreamReader(new FileInputStream("data.txt"), UTF_8),
+        16384)) {  // 16KB buffer
+    String line;
+    while ((line = br.readLine()) != -1) {  // null signals EOF
+        processLine(line);
+    }
+}
+
+// Java 8+ — stream of lines (lazy, one line at a time)
+try (Stream<String> lines = Files.lines(Path.of("data.txt"), UTF_8)) {
+    lines.filter(l -> l.startsWith("ERROR"))
+         .forEach(System.out::println);
+}
+// WARNING: MUST close the stream — it holds an open file handle
+
+// Writing with BufferedWriter
+try (BufferedWriter bw = new BufferedWriter(
+        new OutputStreamWriter(new FileOutputStream("output.txt"), UTF_8))) {
+    bw.write("line one");
+    bw.newLine();               // platform-independent line separator
+    bw.write("line two");
+    // flushed and closed automatically
+}
+
+// PrintWriter — convenient for formatted text output
+try (PrintWriter pw = new PrintWriter(
+        new BufferedWriter(new FileWriter("report.txt", UTF_8)))) {
+    pw.printf("Name: %s, Age: %d%n", "Alice", 30);
+    pw.println("Done");
+}
+```
+
+**NIO.2 convenience methods — Files class (prefer these for small-to-medium files):**
+```java
+// Read entire file
+byte[]       bytes   = Files.readAllBytes(path);
+String       text    = Files.readString(path, UTF_8);      // Java 11+
+List<String> lines   = Files.readAllLines(path, UTF_8);    // all lines into list
+
+// Write entire content
+Files.write(path, bytes);
+Files.writeString(path, "content", UTF_8);                  // Java 11+
+Files.write(path, lines, UTF_8, CREATE, WRITE, TRUNCATE_EXISTING);
+
+// Append
+Files.writeString(path, "appended", UTF_8, CREATE, APPEND);
+
+// WARNING: readAllBytes / readAllLines load entire file into memory
+// For files > ~100MB, use streaming approach instead
+```
+
+**DataInputStream/DataOutputStream — typed primitive I/O:**
+```java
+// Write typed data
+try (DataOutputStream dos = new DataOutputStream(
+        new BufferedOutputStream(new FileOutputStream("data.bin")))) {
+    dos.writeInt(42);
+    dos.writeDouble(3.14);
+    dos.writeBoolean(true);
+    dos.writeUTF("Hello");  // length-prefixed modified UTF-8
+}
+
+// Read back — MUST read in same order and types
+try (DataInputStream dis = new DataInputStream(
+        new BufferedInputStream(new FileInputStream("data.bin")))) {
+    int     i = dis.readInt();
+    double  d = dis.readDouble();
+    boolean b = dis.readBoolean();
+    String  s = dis.readUTF();
+}
+```
+
+**Buffer sizes — guidelines:**
+- Default `BufferedInputStream` / `BufferedOutputStream`: 8KB — often adequate
+- For high-throughput file copy: 64KB–256KB
+- For network streams: match MTU or application frame size
+- For SSD random access: smaller buffers acceptable; HDDs benefit more from large buffers
+
+---
+
+### 4. Serialization
+
+**Definition:** Converting an object graph into a byte stream for persistence or network transmission, and reconstructing it.
+
+```java
+// Class must implement Serializable (marker interface)
+public class Employee implements Serializable {
+    private static final long serialVersionUID = 1L;  // version identifier
+
+    private String name;
+    private int    age;
+    private double salary;
+    private transient String password;          // transient — NOT serialized
+    private static String company = "Acme";    // static — NOT serialized (class-level)
+
+    // Constructors, getters, setters...
+}
+
+// Serialize — write to file
+try (ObjectOutputStream oos = new ObjectOutputStream(
+        new BufferedOutputStream(new FileOutputStream("employee.ser")))) {
+    oos.writeObject(new Employee("Alice", 30, 95000.0));
+}
+
+// Deserialize — read back
+try (ObjectInputStream ois = new ObjectInputStream(
+        new BufferedInputStream(new FileInputStream("employee.ser")))) {
+    Employee emp = (Employee) ois.readObject();  // unchecked cast
+    System.out.println(emp.getName());
+}
+```
+
+**`serialVersionUID` — version control:**
+```java
+// If not declared, JVM auto-generates based on class structure
+// Auto-generated UID changes when class structure changes → breaks deserialization
+
+// ALWAYS declare explicitly
+private static final long serialVersionUID = 1L;
+
+// When you change the class structure incompatibly:
+// - added fields get default values during deserialization of old data
+// - removed fields are ignored
+// - changed field types → InvalidClassException
+// Increment serialVersionUID to force rejection of old incompatible data
+```
+
+**Custom serialization — `readObject` / `writeObject`:**
+```java
+public class SecureEmployee implements Serializable {
+    private static final long serialVersionUID = 1L;
+    private String name;
+    private String encryptedPassword;  // store encrypted, not raw
+
+    // Custom write — encrypt before serializing
+    private void writeObject(ObjectOutputStream oos) throws IOException {
+        oos.defaultWriteObject();       // serialize non-transient fields normally
+        oos.writeUTF(encrypt(rawPassword)); // add custom encrypted field
+    }
+
+    // Custom read — decrypt after deserializing
+    private void readObject(ObjectInputStream ois)
+            throws IOException, ClassNotFoundException {
+        ois.defaultReadObject();            // deserialize normal fields
+        this.rawPassword = decrypt(ois.readUTF());  // read custom field
+    }
+
+    // readObjectNoData — called when stream has no data for this class
+    private void readObjectNoData() throws ObjectStreamException {
+        this.name = "unknown"; // safe defaults
+    }
+}
+```
+
+**Object graph and circular references:**
+```java
+// Serialization handles object graphs — shared references and cycles
+Employee manager = new Employee("Bob");
+Employee emp1    = new Employee("Alice");
+Employee emp2    = new Employee("Charlie");
+emp1.setManager(manager);
+emp2.setManager(manager);   // same manager object
+
+// Both emp1 and emp2 point to the SAME manager object in memory
+// Serialization preserves this — manager is serialized once
+// writeObject tracks references internally — no infinite loop on cycles
+
+// Each ObjectOutputStream maintains a handle table
+// Writing same object twice → second write is a reference handle, not a copy
+```
+
+**`Externalizable` — full manual control:**
+```java
+public class Product implements Externalizable {
+    private String name;
+    private double price;
+    private int    quantity;
+
+    // Required: public no-arg constructor (called during deserialization)
+    public Product() {}
+
+    public Product(String name, double price, int quantity) {
+        this.name = name; this.price = price; this.quantity = quantity;
+    }
+
+    @Override
+    public void writeExternal(ObjectOutput out) throws IOException {
+        out.writeUTF(name);
+        out.writeDouble(price);
+        out.writeInt(quantity);
+        // Write ONLY what you need — full control over format
+    }
+
+    @Override
+    public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
+        this.name     = in.readUTF();
+        this.price    = in.readDouble();
+        this.quantity = in.readInt();
+        // Must match write order exactly
+    }
+}
+```
+
+**Serialization vs Externalization comparison:**
+
+| Feature | Serializable | Externalizable |
+|---|---|---|
+| Control | JVM controls format | Full manual control |
+| Performance | Slower (reflection) | Faster (direct) |
+| No-arg constructor | Not required | **Required** |
+| Inherited fields | Auto-handled | Must handle manually |
+| Versioning | `serialVersionUID` | Manual |
+| Use case | Simple persistence | Performance-critical, custom format |
+
+**Why Java serialization is discouraged in modern code:**
+- Security vulnerabilities — deserialization of untrusted data can execute arbitrary code
+- Fragile versioning — class changes break backward compatibility
+- Not interoperable — Java-only format
+- Poor performance vs alternatives
+
+**Modern alternatives:**
+```java
+// JSON (Jackson)
+ObjectMapper mapper = new ObjectMapper();
+String json   = mapper.writeValueAsString(employee);
+Employee emp  = mapper.readValue(json, Employee.class);
+
+// Protocol Buffers — binary, schema-based, fast, cross-language
+// Avro — schema evolution, widely used in Kafka/Hadoop ecosystem
+// Kryo — faster Java serialization for in-process use
+// MessagePack — compact binary JSON alternative
+```
+
+**Common Pitfalls:**
+- Forgetting `serialVersionUID` — fragile auto-generation
+- Serializing sensitive data (passwords, keys) — use `transient`
+- Deserializing untrusted data — never deserialize from untrusted sources without validation
+- Assuming `transient` fields are zero/null after deserialization — they are, handle in `readObject`
+
+---
+
+### 5. NIO Overview — Channels and Buffers
+
+**Core NIO concepts:**
+
+```
+Traditional I/O:       Thread → Stream → OS kernel → Disk/Network
+NIO:                   Thread → Buffer ← Channel ↔ OS kernel ↔ Disk/Network
+                                ↑
+                         data lands here first
+```
+
+**Buffer — the fundamental NIO data container:**
+```java
+// ByteBuffer — most important buffer type
+ByteBuffer buf = ByteBuffer.allocate(1024);      // heap buffer
+ByteBuffer direct = ByteBuffer.allocateDirect(1024); // direct (off-heap) buffer
+
+// Buffer state — three key pointers:
+// position: where next read/write happens
+// limit:    how far you can read/write
+// capacity: total buffer size
+// invariant: 0 <= position <= limit <= capacity
+
+// Write mode (initial state after allocate)
+buf.put((byte) 42);
+buf.put("Hello".getBytes());
+
+// Switch to read mode
+buf.flip();                    // limit = position; position = 0
+// Now reads from position 0 up to what was written
+
+// Read
+byte b = buf.get();            // reads one byte, advances position
+byte[] dest = new byte[5];
+buf.get(dest);                 // reads 5 bytes
+
+// Reset for reuse
+buf.clear();                   // position = 0, limit = capacity (overwrites old data)
+buf.rewind();                  // position = 0, limit unchanged (re-read same data)
+buf.compact();                 // copies unread data to start, ready for more writing
+
+// Mark and reset
+buf.mark();                    // save current position
+buf.reset();                   // return to marked position
+
+// Absolute reads/writes — no position change
+buf.get(5);                    // read byte at index 5
+buf.put(5, (byte) 99);         // write byte at index 5
+
+// Buffer info
+int remaining = buf.remaining();        // limit - position
+boolean hasRemaining = buf.hasRemaining();
+int position = buf.position();
+int limit    = buf.limit();
+int capacity = buf.capacity();
+```
+
+**FileChannel — NIO file I/O:**
+```java
+// Open via Files.newByteChannel (preferred)
+try (FileChannel channel = (FileChannel) Files.newByteChannel(
+        path, StandardOpenOption.READ)) {
+    ByteBuffer buffer = ByteBuffer.allocate(65536);
+    while (channel.read(buffer) > 0) {
+        buffer.flip();
+        processBuffer(buffer);
+        buffer.clear();
+    }
+}
+
+// Or open via FileInputStream (interop)
+try (FileChannel fc = new FileInputStream("file.bin").getChannel()) {
+    // ...
+}
+
+// Writing
+try (FileChannel fc = FileChannel.open(path,
+        StandardOpenOption.WRITE, StandardOpenOption.CREATE,
+        StandardOpenOption.TRUNCATE_EXISTING)) {
+    ByteBuffer buf = ByteBuffer.wrap("Hello NIO".getBytes(UTF_8));
+    while (buf.hasRemaining()) {
+        fc.write(buf);           // may not write all bytes in one call
+    }
+}
+
+// Channel-to-channel transfer — extremely efficient (zero-copy on supported OS)
+try (FileChannel src  = FileChannel.open(srcPath, READ);
+     FileChannel dest = FileChannel.open(destPath, WRITE, CREATE, TRUNCATE_EXISTING)) {
+    long size = src.size();
+    long transferred = 0;
+    while (transferred < size) {
+        transferred += src.transferTo(transferred, size - transferred, dest);
+    }
+}
+// transferTo/transferFrom uses sendfile() syscall on Linux — zero-copy
+```
+
+**Scatter/Gather I/O:**
+```java
+// Scatter read — fill multiple buffers from one channel
+ByteBuffer header = ByteBuffer.allocate(128);
+ByteBuffer body   = ByteBuffer.allocate(4096);
+channel.read(new ByteBuffer[]{header, body});  // fills header first, then body
+
+// Gather write — write multiple buffers to one channel
+channel.write(new ByteBuffer[]{header, body}); // writes header then body
+// Useful for fixed-format binary protocols
+```
+
+**Heap vs Direct buffers:**
+```java
+// Heap buffer — backed by Java byte[]
+ByteBuffer heap = ByteBuffer.allocate(1024);
+// Pros: GC managed, fast allocation
+// Cons: JVM must copy to native memory for I/O — extra copy
+
+// Direct buffer — off-heap, native memory
+ByteBuffer direct = ByteBuffer.allocateDirect(1024);
+// Pros: no copy needed for I/O operations — faster for repeated I/O
+// Cons: slow allocation (malloc), not GC managed (cleaner/finalizer), harder to debug
+// Use: long-lived buffers for high-frequency I/O (network servers, NIO frameworks)
+
+// Wrapped buffer — wraps existing byte[]
+byte[] arr = new byte[1024];
+ByteBuffer wrapped = ByteBuffer.wrap(arr);
+// Changes to arr visible through buffer and vice versa
+```
+
+**Non-blocking I/O with Selector — the scalable server pattern:**
+```java
+// Single thread managing thousands of connections
+Selector selector = Selector.open();
+
+ServerSocketChannel serverChannel = ServerSocketChannel.open();
+serverChannel.configureBlocking(false);
+serverChannel.bind(new InetSocketAddress(8080));
+serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+
+while (true) {
+    selector.select();  // blocks until at least one channel is ready
+
+    Iterator<SelectionKey> keys = selector.selectedKeys().iterator();
+    while (keys.hasNext()) {
+        SelectionKey key = keys.next();
+        keys.remove();  // MUST remove from selected set manually
+
+        if (key.isAcceptable()) {
+            // New connection
+            ServerSocketChannel server = (ServerSocketChannel) key.channel();
+            SocketChannel client = server.accept();
+            client.configureBlocking(false);
+            client.register(selector, SelectionKey.OP_READ,
+                            ByteBuffer.allocateDirect(4096)); // attach buffer
+
+        } else if (key.isReadable()) {
+            // Data available to read
+            SocketChannel client = (SocketChannel) key.channel();
+            ByteBuffer buf = (ByteBuffer) key.attachment();
+            int bytesRead = client.read(buf);
+            if (bytesRead == -1) {
+                key.cancel();
+                client.close();    // connection closed by peer
+            } else {
+                buf.flip();
+                processRequest(client, buf);
+                buf.clear();
+            }
+
+        } else if (key.isWritable()) {
+            // Channel ready to accept writes
+            SocketChannel client = (SocketChannel) key.channel();
+            ByteBuffer response = (ByteBuffer) key.attachment();
+            client.write(response);
+            if (!response.hasRemaining()) {
+                key.interestOps(SelectionKey.OP_READ); // done writing, back to read
+            }
+        }
+    }
+}
+```
+
+**Common Pitfalls:**
+- Forgetting `buffer.flip()` before reading — reads garbage or throws `BufferUnderflowException`
+- Forgetting `buffer.clear()` before writing again — position stuck at end
+- Not handling partial reads/writes — `channel.read(buf)` may not fill the buffer
+- Not removing selected keys from `selector.selectedKeys()` — processed repeatedly
+- Allocating direct buffers for small, short-lived operations — allocation overhead not worth it
+
+---
+
+### 6. NIO.2 File System APIs
+
+**WatchService — file system change notification:**
+```java
+WatchService watcher = FileSystems.getDefault().newWatchService();
+
+Path dir = Path.of("/etc/config");
+dir.register(watcher,
+    StandardWatchEventKinds.ENTRY_CREATE,
+    StandardWatchEventKinds.ENTRY_MODIFY,
+    StandardWatchEventKinds.ENTRY_DELETE);
+
+// Polling loop (typically in background thread)
+while (true) {
+    WatchKey key = watcher.take();  // blocks until event
+
+    for (WatchEvent<?> event : key.pollEvents()) {
+        WatchEvent.Kind<?> kind = event.kind();
+
+        if (kind == StandardWatchEventKinds.OVERFLOW) {
+            continue;  // events lost due to overflow — handle accordingly
+        }
+
+        @SuppressWarnings("unchecked")
+        WatchEvent<Path> pathEvent = (WatchEvent<Path>) event;
+        Path changed = dir.resolve(pathEvent.context());
+
+        System.out.printf("Event: %s on %s%n", kind.name(), changed);
+    }
+
+    boolean valid = key.reset();  // MUST reset to receive further events
+    if (!valid) {
+        break;  // directory deleted or inaccessible
+    }
+}
+```
+
+**FileSystem abstraction — zip files as file systems:**
+```java
+// Treat a zip/jar file as a file system
+URI zipUri = URI.create("jar:file:/data/archive.zip");
+try (FileSystem zipFs = FileSystems.newFileSystem(zipUri, Map.of("create", "true"))) {
+    Path insideZip = zipFs.getPath("/config/settings.properties");
+    Files.copy(localFile, insideZip, StandardCopyOption.REPLACE_EXISTING);
+
+    // Read from zip
+    String content = Files.readString(zipFs.getPath("/readme.txt"), UTF_8);
+}
+
+// Java 13+ — simpler
+try (FileSystem zipFs = FileSystems.newFileSystem(Path.of("archive.zip"))) {
+    Files.walk(zipFs.getPath("/"))
+         .forEach(System.out::println);
+}
+```
+
+**Atomic operations:**
+```java
+// Atomic file write — write to temp, then atomic rename
+Path target = Path.of("/data/config.json");
+Path temp   = Files.createTempFile(target.getParent(), ".tmp", null);
+try {
+    Files.writeString(temp, newContent, UTF_8);
+    Files.move(temp, target,
+        StandardCopyOption.ATOMIC_MOVE,
+        StandardCopyOption.REPLACE_EXISTING);
+} catch (AtomicMoveNotSupportedException e) {
+    // Fallback if filesystem doesn't support atomic move
+    Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+} finally {
+    Files.deleteIfExists(temp); // clean up if move failed
+}
+```
+
+---
+
+### 7. Memory-Mapped Files
+
+**Definition:** Maps a file (or portion) directly into the process's virtual address space. The OS handles paging — file data is read on demand when pages are accessed, without explicit read() syscalls.
+
+**When to use:**
+- Files too large to read entirely into memory
+- Random access patterns across a large file (log parsers, binary databases)
+- IPC between processes via shared memory on the same machine
+- Read-heavy workloads with repeated access (OS caches mapped pages)
+
+```java
+try (FileChannel channel = FileChannel.open(path, READ, WRITE)) {
+    long fileSize = channel.size();
+
+    // Map entire file into memory
+    MappedByteBuffer mbb = channel.map(
+        FileChannel.MapMode.READ_WRITE,  // READ_ONLY, READ_WRITE, PRIVATE
+        0,                               // position in file to start mapping
+        fileSize                         // size of mapping
+    );
+
+    // Access file content through buffer — OS handles I/O
+    byte firstByte = mbb.get(0);           // random access O(1) — may page fault
+    mbb.put(0, (byte) 42);                 // write — page fault loads page, marks dirty
+
+    // Batch read
+    byte[] header = new byte[16];
+    mbb.position(0);
+    mbb.get(header);
+
+    // Force dirty pages to disk (otherwise OS flushes lazily)
+    mbb.force();
+
+    // Check if loaded in physical memory (advisory)
+    mbb.load();   // hint to OS to load all pages
+    mbb.isLoaded(); // returns true if likely in RAM
+
+    // Large file — map in chunks (virtual address space limit)
+    long chunkSize = 256 * 1024 * 1024L; // 256MB chunks
+    for (long offset = 0; offset < fileSize; offset += chunkSize) {
+        long size = Math.min(chunkSize, fileSize - offset);
+        MappedByteBuffer chunk = channel.map(READ_ONLY, offset, size);
+        processChunk(chunk);
+    }
+}
+```
+
+**Memory-mapped file modes:**
+
+| Mode | Read | Write | Changes visible to others |
+|---|---|---|---|
+| `READ_ONLY` | ✅ | ❌ | N/A |
+| `READ_WRITE` | ✅ | ✅ | Yes — shared |
+| `PRIVATE` (copy-on-write) | ✅ | ✅ local | No — process-private copy |
+
+**Unmap problem — Java's dirty secret:**
+```java
+// MappedByteBuffer has NO close() method
+// The mapping is released when the buffer is GC'd — unpredictable
+// On Windows: mapped file CANNOT be deleted until unmapped — resource leak
+
+// Workaround using internal API (unsafe but practical pre-Java 14)
+MappedByteBuffer mbb = channel.map(READ_ONLY, 0, size);
+// ... use buffer ...
+// Force unmap via Cleaner (Java 9+)
+if (mbb instanceof sun.nio.ch.DirectBuffer) {
+    ((sun.nio.ch.DirectBuffer) mbb).cleaner().clean();
+}
+
+// Java 14+: Foreign Memory API (incubator → stable in Java 21)
+// MemorySegment provides explicit lifecycle management
+import java.lang.foreign.*;
+try (Arena arena = Arena.ofConfined()) {
+    MemorySegment segment = channel.map(
+        FileChannel.MapMode.READ_ONLY, 0, fileSize, arena
+    );
+    // segment is released when arena is closed — explicit, deterministic
+}
+```
+
+**IPC with memory-mapped files:**
+```java
+// Process A — writes
+try (FileChannel fc = FileChannel.open(sharedPath, READ, WRITE, CREATE)) {
+    MappedByteBuffer shared = fc.map(READ_WRITE, 0, 4096);
+    shared.putInt(0, 42);    // write at offset 0
+    shared.force();           // ensure visible to other processes
+}
+
+// Process B — reads
+try (FileChannel fc = FileChannel.open(sharedPath, READ)) {
+    MappedByteBuffer shared = fc.map(READ_ONLY, 0, 4096);
+    int value = shared.getInt(0);  // reads what Process A wrote
+}
+// NOTE: For proper synchronization across processes, use file locking
+// FileLock lock = channel.lock(0, 4, false); // lock region
+```
+
+---
+
+## Interview Questions
+
+**Q1: What is the difference between `java.io` and `java.nio`? When would you choose NIO?**
+
+`java.io` is stream-oriented and blocking — each read/write blocks the calling thread until data is available. It uses an OS buffer copy model. `java.nio` is buffer-oriented — data is explicitly read into a `Buffer` object, and channels can be configured as non-blocking. NIO also provides `Selector` for multiplexing many channels on one thread. Choose NIO when: (1) building a server that handles thousands of concurrent connections with a small thread pool — the selector/non-blocking model avoids one-thread-per-connection overhead; (2) doing large file I/O where zero-copy transfer (`transferTo`) matters; (3) needing memory-mapped files; (4) needing scatter/gather I/O for binary protocols. For simple file processing, NIO.2's `Files` utility class is the right tool regardless — it uses NIO internally.
+
+---
+
+**Q2: Explain the Buffer state machine — `flip()`, `clear()`, `compact()`.**
+
+A `ByteBuffer` has three pointers: `position` (next read/write), `limit` (boundary), `capacity` (total size). After `allocate()`, the buffer is in write mode: position=0, limit=capacity. `flip()` switches to read mode: limit=position (marks end of written data), position=0. `clear()` resets for writing: position=0, limit=capacity — it does NOT erase data, just resets pointers. `compact()` copies unread bytes to the start, sets position to after the copied data, limit=capacity — used when you've partially read a buffer and want to write more data while keeping the unread portion. The most common bug: forgetting `flip()` before reading — `get()` reads from position which is at the end of written data, returning garbage or throwing `BufferUnderflowException`.
+
+---
+
+**Q3: What is the difference between heap buffers and direct buffers?**
+
+Heap buffers (`ByteBuffer.allocate()`) are backed by a Java `byte[]` on the heap — fast allocation, GC managed, but require an extra copy from heap to native memory before each I/O operation (the OS can't directly DMA from heap because GC may move objects). Direct buffers (`ByteBuffer.allocateDirect()`) are allocated in native off-heap memory — slow to allocate (native `malloc`), not GC managed (requires explicit cleanup via `Cleaner`), but eliminate the extra copy for I/O operations. Use direct buffers for long-lived buffers doing frequent I/O (network server read/write buffers), heap buffers for short-lived or infrequent I/O. Netty pre-allocates a pool of direct buffers and recycles them to amortize allocation cost.
+
+---
+
+**Q4: What is zero-copy I/O and how does Java support it?**
+
+Zero-copy means transferring data between I/O sources without copying through user space. Normally: disk → kernel buffer → user buffer → kernel buffer → network socket (4 copies). With zero-copy via `sendfile()`: disk → kernel buffer → network socket (2 copies, user space never touched). Java supports zero-copy through `FileChannel.transferTo()` and `transferFrom()` — on Linux these map to the `sendfile()` or `splice()` syscall. This is how Java HTTP servers serve static files efficiently. Condition: both channels must be capable (FileChannel to SocketChannel works; FileChannel to FileChannel is also optimized). The performance difference for large file serving can be 2-5x throughput improvement.
+
+---
+
+**Q5: Explain Java Serialization — what are its risks and alternatives?**
+
+Java serialization converts object graphs to bytes via `ObjectOutputStream`. Risks: (1) **Security** — deserialization executes code during object reconstruction; gadget chains in classpath can lead to Remote Code Execution (RCE) — Apache Commons Collections exploit; (2) **Fragility** — class changes break serialized data; `serialVersionUID` mismatch causes `InvalidClassException`; (3) **Performance** — reflection-based, verbose binary format; (4) **Interoperability** — Java-only format. Never deserialize data from untrusted sources. Modern alternatives: JSON (Jackson/Gson) for human-readable text, Protocol Buffers for compact binary with schema evolution, Avro for big data pipelines, Kryo for fast in-JVM serialization, MessagePack for compact cross-language binary. If you must use Java serialization, use `ObjectInputFilter` (Java 9+) to whitelist allowed classes.
+
+---
+
+**Q6: What is the difference between `Serializable` and `Externalizable`?**
+
+Both enable object serialization but differ in control level. `Serializable` is a marker interface — the JVM handles everything via reflection, reading all non-transient non-static fields automatically. `Externalizable` extends `Serializable` and requires implementing `writeExternal()` and `readExternal()` — you write every field manually. `Externalizable` is faster because there's no reflection; you control exactly what bytes are written, enabling compression or custom encoding. Key constraint: `Externalizable` requires a public no-arg constructor — during deserialization, Java creates an empty instance via `new()` then calls `readExternal()` to populate it. `Serializable` doesn't require this — it bypasses constructors entirely. Use `Externalizable` when performance is critical or when you need a custom binary format.
+
+---
+
+**Q7: How does `try-with-resources` relate to I/O streams? What if `close()` throws?**
+
+All I/O streams implement `Closeable` (or `AutoCloseable`), making them usable with try-with-resources. The resource is closed automatically when the `try` block exits — even if an exception occurs. If both the `try` body and `close()` throw exceptions, the `close()` exception is **suppressed** (not lost) — added to the primary exception via `addSuppressed()`. This is critical for `BufferedOutputStream` — its `close()` calls `flush()`, which can throw if disk is full. Without try-with-resources, a manual `finally` block would need to catch and handle `close()` exceptions, and a `close()` exception in `finally` would replace and lose the original exception from the `try` body. Always use try-with-resources for streams.
+
+---
+
+**Q8: What is `InputStreamReader` and why should you always specify a charset?**
+
+`InputStreamReader` is a bridge class that converts a byte `InputStream` into a character `Reader` by decoding bytes using a specified character encoding. Without specifying charset, it uses `Charset.defaultCharset()` — the platform default, which varies by OS (`UTF-8` on Linux/macOS, `Windows-1252` on legacy Windows). Code that works on developer machines can break in production on different OS configurations. Always specify: `new InputStreamReader(stream, StandardCharsets.UTF_8)`. The same applies to `FileReader` — it always uses the platform default with no way to specify charset (pre-Java 11). Java 11+ added a `FileReader(File, Charset)` constructor. Best practice: use `Files.newBufferedReader(path, UTF_8)` or `Files.readString(path, UTF_8)` — explicit, concise, correct.
+
+---
+
+**Q9: When would you use memory-mapped files and what are their limitations?**
+
+Use memory-mapped files when: (1) processing large files (> available RAM) — OS pages in only needed portions; (2) random access patterns across large files — direct array-like `get(index)` access; (3) IPC between processes on the same machine via shared memory; (4) repeatedly reading the same file — OS caches mapped pages, subsequent reads hit RAM. Limitations: (1) virtual address space is limited (more relevant on 32-bit JVMs); (2) no explicit close/unmap API — mapping held until GC collects the buffer or you use internal `Cleaner` APIs; (3) on Windows, mapped files cannot be deleted; (4) page faults can cause unpredictable latency spikes — problematic for real-time systems; (5) not suitable for network or non-seekable streams.
+
+---
+
+**Q10: Explain the Selector pattern and how it enables scalable servers.**
+
+A `Selector` multiplexes multiple non-blocking `Channel` instances on a single thread. Each channel registers with the selector for events it cares about (`OP_ACCEPT`, `OP_READ`, `OP_WRITE`, `OP_CONNECT`). `selector.select()` blocks until at least one channel is ready, returning the set of ready `SelectionKey` objects. One thread can thus service thousands of connections without blocking on any single connection's I/O. This is the reactor pattern — the foundation of Netty, Tomcat NIO connector, and Java async servers. The contrast: traditional blocking I/O requires one thread per connection — at 10,000 connections, you need 10,000 threads (~80GB stack space). With NIO and selectors, 4 threads can handle the same load. Caveat: selector-based code is complex; in practice, use Netty or a framework rather than raw NIO.
+
+---
+
+**Q11: What is `transferTo()` and when is it more efficient than manual copy?**
+
+`FileChannel.transferTo(position, count, target)` transfers bytes from a file channel to another channel — for `SocketChannel` targets on Linux, it invokes the `sendfile()` syscall, keeping data entirely in kernel space (zero-copy). Manual copy — `channel.read(buffer); socket.write(buffer)` — requires: kernel reads file to kernel buffer, copies to user-space buffer, copies back to kernel socket buffer (2 extra copies, 2 extra context switches). `transferTo` eliminates user-space involvement entirely. For serving a 1GB file, this is the difference between copying 1GB through user space vs not at all. Limitations: the target channel must support being a transfer target (`WritableByteChannel`); the optimization is OS-specific; on Windows it uses `TransmitFile`.
+
+---
+
+**Q12: What is the difference between `Files.lines()` and `Files.readAllLines()`?**
+
+`Files.readAllLines()` reads the entire file into a `List<String>` — all lines in memory at once. Simple but problematic for large files: a 1GB log file produces a `List` with millions of strings in heap. `Files.lines()` returns a lazy `Stream<String>` — reads one line at a time as the stream is consumed. **Critical**: `Files.lines()` opens a file handle that must be explicitly closed — always use try-with-resources: `try (Stream<String> lines = Files.lines(path)) { ... }`. If the stream is not closed, the file handle leaks. For large files or when you process early-terminating (with `findFirst()`, `limit()`), `Files.lines()` is far more memory-efficient. For small files where all lines are needed, `readAllLines()` is simpler and fine.
+
+---
+
+**Q13: How do you implement an efficient large file copy in Java?**
+
+```java
+// Option 1: Files.copy — simplest, uses NIO internally
+Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING);
+
+// Option 2: FileChannel.transferTo — zero-copy, best for same-machine copies
+try (FileChannel in  = FileChannel.open(src, READ);
+     FileChannel out = FileChannel.open(dest, WRITE, CREATE, TRUNCATE_EXISTING)) {
+    long size = in.size(), transferred = 0;
+    while (transferred < size)
+        transferred += in.transferTo(transferred, size - transferred, out);
+}
+
+// Option 3: Buffered streams — portable, explicit control
+try (InputStream in  = new BufferedInputStream(new FileInputStream(src), 65536);
+     OutputStream out = new BufferedOutputStream(new FileOutputStream(dest), 65536)) {
+    in.transferTo(out); // Java 9+
+}
+```
+`Files.copy()` is the right default. Use `transferTo` when copying to a network channel. Use buffered streams when you need to process bytes during the copy.
+
+---
+
+**Q14: What is `WatchService` and what are its limitations?**
+
+`WatchService` (Java 7+) monitors a directory for file system events: `ENTRY_CREATE`, `ENTRY_MODIFY`, `ENTRY_DELETE`. Register a `Path` with the service, then poll or block for events via `take()` / `poll()`. Limitations: (1) watches only a single directory level — not recursive; you must register subdirectories manually (using `Files.walkFileTree`); (2) events may be coalesced or delayed — `OVERFLOW` event signals lost events; (3) `ENTRY_MODIFY` may fire multiple times for one save (many editors write then rename); (4) accuracy varies by OS — macOS native polling was historically inaccurate; (5) no event for file content changes inside the watched directory's subdirectories without explicit registration. Practical use: config file reloading, hot-deploy, IDE file sync.
+
+---
+
+**Q15: What is the `ObjectInputFilter` and why was it introduced?**
+
+`ObjectInputFilter` (Java 9+) is a whitelist/blacklist mechanism for Java deserialization, introduced in response to widespread deserialization vulnerabilities (CVE-2015-4852 and others). Without a filter, `ObjectInputStream` will attempt to instantiate any class it encounters in the stream — attackers craft malicious serialized data containing gadget chains (sequences of existing classes whose deserialization triggers harmful code). `ObjectInputFilter` intercepts class resolution, allowing you to: reject unknown classes, limit array sizes and graph depth, whitelist only expected classes. Set globally: `ObjectInputFilter.Config.setSerialFilter(filter)`. Set per-stream: `ois.setObjectInputFilter(filter)`. Example: `ObjectInputFilter.Config.createFilter("com.myapp.*;java.util.*;maxdepth=5;maxarray=100;reject=*")`. Any production code deserializing Java objects must have a filter configured.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+### I/O Performance Architecture
+
+```
+Performance hierarchy (fastest to slowest for reads):
+1. Memory-mapped file (OS page cache)     — nanoseconds if cached
+2. Direct ByteBuffer + FileChannel        — microseconds
+3. BufferedInputStream (large buffer)     — microseconds  
+4. BufferedInputStream (default 8KB)      — microseconds
+5. Unbuffered FileInputStream             — milliseconds per byte (syscall each time)
+
+For writes, add: fsync() cost if durability required (~5-10ms on HDD, ~100µs on SSD)
+```
+
+### Async File I/O — `AsynchronousFileChannel`
+```java
+// Non-blocking file I/O — callback or Future based
+AsynchronousFileChannel asyncChannel =
+    AsynchronousFileChannel.open(path, READ);
+
+ByteBuffer buffer = ByteBuffer.allocate(65536);
+
+// Future-based
+Future<Integer> result = asyncChannel.read(buffer, 0);
+int bytesRead = result.get();  // blocks here — defeats the purpose somewhat
+
+// Completion handler — truly async
+asyncChannel.read(buffer, 0, buffer, new CompletionHandler<Integer, ByteBuffer>() {
+    @Override
+    public void completed(Integer bytesRead, ByteBuffer attachment) {
+        attachment.flip();
+        processData(attachment);
+    }
+
+    @Override
+    public void failed(Throwable exc, ByteBuffer attachment) {
+        log.error("Async read failed", exc);
+    }
+});
+```
+
+### Integration with Modern Java
+- **Virtual threads (Java 21)**: Blocking I/O on virtual threads is automatically unmounted — you get NIO-scale concurrency with java.io simplicity; `BufferedReader.readLine()` no longer blocks a platform thread
+- **Foreign Memory API (Java 21)**: `MemorySegment` + `Arena` provides explicit lifecycle management for off-heap memory and memory-mapped files — replaces unsafe `Cleaner` hacks for unmapping
+- **Structured concurrency**: Combine with virtual threads for clean parallel I/O patterns
+
+### Resource Leak Detection
+```java
+// In testing — use a custom SecurityManager or agent to detect unclosed streams
+// In production — monitor file descriptor count
+// Linux: /proc/<pid>/fd — count open file descriptors
+// JVM: ManagementFactory and OperatingSystemMXBean (limited)
+// Tools: async-profiler, JFR (Java Flight Recorder) with leak profiling
+```
+
+---
+
+## Summary / Cheat Sheet
+
+```
+STREAM SELECTION:
+─────────────────────────────────────────────────────────
+Binary data                → FileInputStream / FileOutputStream
+Text data                  → InputStreamReader / OutputStreamWriter (specify charset!)
+Typed primitives           → DataInputStream / DataOutputStream
+Object graphs              → ObjectInputStream / ObjectOutputStream
+All of the above           → wrap with Buffered* for performance
+Large files / NIO          → FileChannel + ByteBuffer
+Simple file ops            → Files.readString/writeString/copy/move
+
+BUFFERING RULES:
+─────────────────────────────────────────────────────────
+Always buffer FileInputStream/FileOutputStream
+Default buffer size 8KB — increase to 64KB+ for large file throughput
+Files.lines() > Files.readAllLines() for large files
+Never read byte-by-byte without buffering
+
+NIO BUFFER STATE:
+─────────────────────────────────────────────────────────
+allocate()  → write mode  (pos=0, limit=capacity)
+after write → pos advanced
+flip()      → read mode   (limit=pos, pos=0)
+after read  → pos advanced
+clear()     → write mode  (pos=0, limit=capacity) — reuse
+compact()   → write mode, unread data preserved at start
+rewind()    → re-read     (pos=0, limit unchanged)
+
+CHARSET RULES:
+─────────────────────────────────────────────────────────
+ALWAYS specify StandardCharsets.UTF_8 explicitly
+NEVER use FileReader without charset (Java 11+ has constructor)
+NEVER rely on Charset.defaultCharset() in production code
+
+SERIALIZATION:
+─────────────────────────────────────────────────────────
+Always declare serialVersionUID
+Mark sensitive fields transient
+NEVER deserialize untrusted data without ObjectInputFilter
+Prefer JSON/Protobuf over Java serialization for new code
+Externalizable = faster + manual + requires no-arg constructor
+
+FILES API (NIO.2) — prefer over java.io.File:
+─────────────────────────────────────────────────────────
+Files.exists/isDirectory/size/readAttributes
+Files.createFile/createDirectories/delete/deleteIfExists
+Files.copy(src, dest, REPLACE_EXISTING)
+Files.move(src, dest, ATOMIC_MOVE)
+Files.walk / Files.list — close the Stream!
+Files.lines(path, UTF_8) — close the Stream!
+WatchService — config reloading, NOT real-time file sync
+
+PERFORMANCE RULES:
+─────────────────────────────────────────────────────────
+transferTo/transferFrom   → zero-copy between channels
+MappedByteBuffer          → large file random access
+Direct ByteBuffer         → long-lived high-frequency I/O
+allocateDirect costly     → pool and reuse (like Netty)
+fsync needed for durability → FileChannel.force(true)
+```
+
+# Multithreading & Concurrency — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+**Concurrency** is the ability of a program to execute multiple tasks in overlapping time periods. **Multithreading** is the specific mechanism of achieving concurrency using threads within a single process.
+
+**Why it matters:**
+- Modern CPUs are multi-core; single-threaded code leaves performance on the table
+- Nearly every production system handles I/O, background jobs, or parallel computation
+- Bugs in concurrent code (deadlocks, race conditions) are notoriously hard to reproduce and debug
+
+**Real-world applications:**
+- Web servers handling thousands of simultaneous HTTP requests
+- Database connection pooling
+- Real-time data processing pipelines (Kafka consumers)
+- UI responsiveness (background work off the main thread)
+- Parallel batch processing (ETL jobs, ML data pipelines)
+
+---
+
+## Core Concepts
+
+- **Thread**: Lightweight unit of execution sharing the same process memory space
+- **Process vs Thread**: Process = isolated memory; Thread = shared heap, own stack
+- **Concurrency vs Parallelism**: Concurrency = managing multiple tasks (may interleave on 1 core); Parallelism = physically executing simultaneously on multiple cores
+- **Critical Section**: Code that accesses shared mutable state — must be protected
+- **Happens-Before**: JMM guarantee that effects of action A are visible to action B
+- **Memory Visibility**: Without synchronization, threads may read stale cached values from CPU registers/L1 cache
+
+```
+[ Thread 1 ]  [ Thread 2 ]  [ Thread 3 ]
+     |              |              |
+  [Stack]        [Stack]        [Stack]
+     \              |              /
+      \_____________|_____________/
+              [Shared Heap]
+           (objects, static fields)
+```
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. Thread Lifecycle
+
+```
+NEW → RUNNABLE → (RUNNING) → BLOCKED / WAITING / TIMED_WAITING → TERMINATED
+```
+
+| State | Cause |
+|---|---|
+| NEW | Thread created, not yet started |
+| RUNNABLE | `start()` called; ready or currently executing |
+| BLOCKED | Waiting to acquire a monitor lock |
+| WAITING | `wait()`, `join()`, `park()` — indefinite |
+| TIMED_WAITING | `sleep(n)`, `wait(n)`, `join(n)` |
+| TERMINATED | `run()` completed or exception thrown |
+
+**Key Details:**
+- `BLOCKED` vs `WAITING`: BLOCKED is specifically for monitor lock acquisition; WAITING is a voluntary pause
+- A terminated thread **cannot** be restarted
+- `Thread.getState()` returns current state
+
+**Common Pitfall:** Calling `run()` directly instead of `start()` — executes on the **calling** thread, no new thread is created.
+
+---
+
+### 2. Thread Creation — Runnable vs Callable
+
+**Three primary approaches:**
+
+```java
+// 1. Extend Thread
+class MyThread extends Thread {
+    @Override
+    public void run() {
+        System.out.println("Running: " + Thread.currentThread().getName());
+    }
+}
+new MyThread().start();
+
+// 2. Implement Runnable (preferred — no return value, no checked exception)
+Runnable task = () -> System.out.println("Runnable running");
+new Thread(task).start();
+
+// 3. Implement Callable (return value + checked exceptions)
+Callable<Integer> callable = () -> {
+    Thread.sleep(100);
+    return 42;
+};
+FutureTask<Integer> future = new FutureTask<>(callable);
+new Thread(future).start();
+Integer result = future.get(); // blocks until done
+```
+
+**Runnable vs Callable:**
+
+| | Runnable | Callable\<V\> |
+|---|---|---|
+| Return type | void | V |
+| Checked exceptions | No | Yes |
+| Used with | Thread, Executor | ExecutorService |
+| Result retrieval | N/A | Future\<V\> |
+
+**Best Practice:** Prefer `Callable` + `ExecutorService` over raw `Thread` in production code.
+
+---
+
+### 3. Synchronization & Intrinsic Locks
+
+Every Java object has an **intrinsic monitor lock** (mutex). `synchronized` acquires it.
+
+```java
+public class Counter {
+    private int count = 0;
+
+    // Method-level lock — locks on 'this'
+    public synchronized void increment() {
+        count++;
+    }
+
+    // Block-level lock — more granular
+    public void decrement() {
+        synchronized (this) {
+            count--;
+        }
+    }
+
+    // Static synchronized — locks on Class object
+    public static synchronized void staticMethod() { }
+}
+```
+
+**How it works:**
+- Only one thread holds the monitor at a time
+- Other threads attempting to enter go to **BLOCKED** state
+- Lock is **reentrant** — same thread can re-acquire without deadlocking
+
+```java
+// Reentrant example
+public synchronized void outer() {
+    inner(); // safe — same thread re-acquires
+}
+public synchronized void inner() { }
+```
+
+**Key Details:**
+- `synchronized` guarantees **mutual exclusion** AND **visibility** (happens-before)
+- Locking is on the **object reference**, not the code block
+- Never `synchronize` on a non-final reference or boxed types (Integer, String literals)
+
+**Common Pitfalls:**
+```java
+// WRONG — locking on a mutable reference
+private Object lock = new Object();
+public void bad() {
+    synchronized (lock) { // if lock is reassigned, protection breaks
+        lock = new Object(); // now other threads enter!
+    }
+}
+```
+
+---
+
+### 4. Race Conditions
+
+A race condition occurs when the outcome depends on the **non-deterministic ordering** of thread execution.
+
+**Classic example — check-then-act:**
+```java
+// NOT thread-safe
+if (map.containsKey(key)) {       // Thread A checks
+    return map.get(key);           // Thread B removes here → NPE
+}
+
+// Thread-safe alternative
+return map.computeIfAbsent(key, k -> createValue(k));
+```
+
+**Read-modify-write race:**
+```java
+// count++ is NOT atomic — it's read, increment, write (3 steps)
+// Thread A reads 5, Thread B reads 5, both write 6 → lost update
+private int count = 0; // UNSAFE
+
+// Fix 1: synchronized
+public synchronized void increment() { count++; }
+
+// Fix 2: AtomicInteger
+private AtomicInteger count = new AtomicInteger(0);
+count.incrementAndGet(); // atomic CAS operation
+```
+
+---
+
+### 5. Volatile Keyword
+
+`volatile` ensures **visibility** of writes across threads by preventing CPU caching and compiler reordering.
+
+```java
+public class StopFlag {
+    private volatile boolean stopped = false; // without volatile, loop may never see update
+
+    public void stop() { stopped = true; }
+
+    public void run() {
+        while (!stopped) { // always reads from main memory
+            doWork();
+        }
+    }
+}
+```
+
+**What volatile guarantees:**
+- Every write is immediately flushed to main memory
+- Every read fetches from main memory (not CPU cache)
+- Establishes happens-before between write and subsequent read
+
+**What volatile does NOT guarantee:**
+- **Atomicity** — `volatile int i; i++` is still 3 non-atomic steps
+- **Mutual exclusion** — multiple threads can still interleave
+
+**Rule of thumb:** Use `volatile` for flags/state variables with **one writer, multiple readers**. Use `synchronized` or `Atomic*` when you need atomicity.
+
+---
+
+### 6. Deadlocks
+
+A deadlock occurs when two or more threads are **permanently blocked** waiting for each other.
+
+```
+Thread A holds Lock 1, waits for Lock 2
+Thread B holds Lock 2, waits for Lock 1
+→ Circular wait → Deadlock
+```
+
+```java
+// Classic deadlock
+Object lock1 = new Object();
+Object lock2 = new Object();
+
+Thread t1 = new Thread(() -> {
+    synchronized (lock1) {
+        Thread.sleep(50);
+        synchronized (lock2) { /* work */ } // waits for lock2
+    }
+});
+
+Thread t2 = new Thread(() -> {
+    synchronized (lock2) {
+        Thread.sleep(50);
+        synchronized (lock1) { /* work */ } // waits for lock1
+    }
+});
+```
+
+**Four necessary conditions (Coffman):**
+1. **Mutual exclusion** — resources non-shareable
+2. **Hold and wait** — holding one, waiting for another
+3. **No preemption** — locks not forcibly taken
+4. **Circular wait** — cyclic dependency
+
+**Prevention strategies:**
+```java
+// Strategy 1: Consistent lock ordering
+// Always acquire lock1 before lock2 — everywhere in the codebase
+
+// Strategy 2: tryLock with timeout (ReentrantLock)
+if (lock1.tryLock(50, TimeUnit.MILLISECONDS)) {
+    try {
+        if (lock2.tryLock(50, TimeUnit.MILLISECONDS)) {
+            try { /* work */ }
+            finally { lock2.unlock(); }
+        }
+    } finally { lock1.unlock(); }
+}
+
+// Strategy 3: Lock ordering by identity hash
+// Sort locks by System.identityHashCode before acquiring
+```
+
+**Detection:** Use `jstack <pid>` or `ThreadMXBean.findDeadlockedThreads()` in production.
+
+---
+
+### 7. Thread Safety
+
+A class is **thread-safe** if it behaves correctly when accessed from multiple threads with no additional synchronization from the caller.
+
+**Strategies (from preferred to least):**
+
+```java
+// 1. Immutability — best approach
+public final class ImmutablePoint {
+    private final int x, y;
+    public ImmutablePoint(int x, int y) { this.x = x; this.y = y; }
+    // no setters
+}
+
+// 2. ThreadLocal — per-thread state, no sharing
+private static final ThreadLocal<SimpleDateFormat> dateFormat =
+    ThreadLocal.withInitial(() -> new SimpleDateFormat("yyyy-MM-dd"));
+
+// 3. Confinement — don't share the object
+// Stack confinement: local variables are inherently thread-safe
+
+// 4. Synchronization — when sharing mutable state
+// 5. Concurrent data structures — ConcurrentHashMap, etc.
+```
+
+**Common non-obvious thread-safety issues:**
+```java
+// StringBuilder is NOT thread-safe — use StringBuffer or local variable
+// HashMap is NOT thread-safe — use ConcurrentHashMap
+// ArrayList is NOT thread-safe — use CopyOnWriteArrayList or Collections.synchronizedList()
+// SimpleDateFormat is NOT thread-safe — use ThreadLocal or DateTimeFormatter (Java 8+, immutable)
+```
+
+---
+
+### 8. Executor Framework
+
+Raw threads are expensive to create/destroy. `ExecutorService` manages a pool.
+
+```java
+// Fixed thread pool — known, bounded concurrency
+ExecutorService executor = Executors.newFixedThreadPool(4);
+
+// Cached — grows as needed, reclaims idle threads (good for short tasks)
+ExecutorService cached = Executors.newCachedThreadPool();
+
+// Single thread — sequential execution guarantee
+ExecutorService single = Executors.newSingleThreadExecutor();
+
+// Scheduled — run after delay or periodically
+ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
+scheduler.scheduleAtFixedRate(task, 0, 1, TimeUnit.SECONDS);
+
+// Submit tasks
+Future<Integer> future = executor.submit(() -> heavyComputation());
+executor.execute(() -> fireAndForget()); // Runnable, no result
+
+// Graceful shutdown — ALWAYS do this
+executor.shutdown(); // no new tasks, waits for running tasks
+if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+    executor.shutdownNow(); // interrupt running tasks
+}
+```
+
+**ThreadPoolExecutor — the real constructor:**
+```java
+// All Executors.new*() methods are shortcuts to this
+ThreadPoolExecutor pool = new ThreadPoolExecutor(
+    2,                        // corePoolSize
+    10,                       // maximumPoolSize
+    60L, TimeUnit.SECONDS,    // keepAliveTime for excess threads
+    new ArrayBlockingQueue<>(100), // work queue
+    new ThreadPoolExecutor.CallerRunsPolicy() // rejection policy
+);
+```
+
+**Rejection policies:**
+- `AbortPolicy` (default) — throws `RejectedExecutionException`
+- `CallerRunsPolicy` — caller thread runs the task (natural backpressure)
+- `DiscardPolicy` — silently drops
+- `DiscardOldestPolicy` — drops oldest queued task
+
+**Sizing formula (CPU-bound vs I/O-bound):**
+- CPU-bound: `threads = N_cores + 1`
+- I/O-bound: `threads = N_cores × (1 + wait_time / compute_time)`
+
+---
+
+### 9. Future and CompletableFuture
+
+**Future\<T\>** — basic async result handle:
+```java
+Future<String> future = executor.submit(() -> fetchFromDB());
+// ... do other work ...
+String result = future.get();           // blocks
+String result2 = future.get(5, TimeUnit.SECONDS); // with timeout
+boolean done = future.isDone();
+future.cancel(true); // interrupt if running
+```
+
+**CompletableFuture\<T\>** — rich async pipeline (Java 8+):
+```java
+// Basic async execution
+CompletableFuture<String> cf = CompletableFuture.supplyAsync(() -> fetchData());
+
+// Chaining — thenApply (synchronous transform)
+CompletableFuture<Integer> length = cf.thenApply(String::length);
+
+// thenApplyAsync — runs on a different thread
+cf.thenApplyAsync(s -> process(s), customExecutor);
+
+// thenAccept — consume result, return void
+cf.thenAccept(System.out::println);
+
+// thenCompose — flatMap (avoids CompletableFuture<CompletableFuture<T>>)
+CompletableFuture<Order> order = 
+    CompletableFuture.supplyAsync(() -> fetchUserId())
+        .thenCompose(id -> fetchOrderAsync(id));
+
+// thenCombine — merge two independent futures
+CompletableFuture<String> combined =
+    CompletableFuture.supplyAsync(() -> "Hello")
+        .thenCombine(CompletableFuture.supplyAsync(() -> " World"),
+                     (a, b) -> a + b);
+
+// allOf — wait for all (returns CF<Void>)
+CompletableFuture.allOf(cf1, cf2, cf3).join();
+
+// anyOf — first to complete
+CompletableFuture.anyOf(cf1, cf2).thenAccept(result -> handle(result));
+
+// Exception handling
+cf.exceptionally(ex -> "fallback value")
+  .handle((result, ex) -> ex != null ? "error" : result); // always runs
+```
+
+**Common Pitfall:** `thenApply` vs `thenApplyAsync` — without `Async`, the callback runs on the completing thread (could be the main thread or a pool thread depending on completion timing). Always use `Async` variant with explicit executor for predictable behavior.
+
+---
+
+### 10. Locks and ReentrantLock
+
+`ReentrantLock` offers more control than `synchronized`:
+
+```java
+private final ReentrantLock lock = new ReentrantLock();
+
+public void transfer(Account from, Account to, double amount) {
+    lock.lock();
+    try {
+        from.debit(amount);
+        to.credit(amount);
+    } finally {
+        lock.unlock(); // ALWAYS in finally block
+    }
+}
+
+// tryLock — non-blocking attempt
+if (lock.tryLock()) {
+    try { /* work */ }
+    finally { lock.unlock(); }
+} else {
+    // do something else
+}
+
+// tryLock with timeout — deadlock avoidance
+if (lock.tryLock(100, TimeUnit.MILLISECONDS)) { ... }
+
+// Interruptible lock — respond to interrupts
+lock.lockInterruptibly(); // throws InterruptedException if interrupted while waiting
+
+// Fairness — threads acquire in arrival order (lower throughput, prevents starvation)
+ReentrantLock fairLock = new ReentrantLock(true);
+
+// Condition variables — fine-grained wait/notify
+Condition notEmpty = lock.newCondition();
+Condition notFull = lock.newCondition();
+
+// Producer
+lock.lock();
+try {
+    while (buffer.isFull()) notFull.await();
+    buffer.add(item);
+    notEmpty.signal(); // wake one waiting consumer
+} finally { lock.unlock(); }
+```
+
+**synchronized vs ReentrantLock:**
+
+| Feature | synchronized | ReentrantLock |
+|---|---|---|
+| Syntax | Built-in keyword | Explicit API |
+| Fairness | No | Optional |
+| tryLock | No | Yes |
+| Interruptible | No | Yes |
+| Multiple conditions | No (one wait set) | Yes (multiple Conditions) |
+| Performance | Similar in modern JVM | Slightly better under high contention |
+
+---
+
+### 11. ReadWriteLock
+
+Allows **multiple concurrent readers** OR **one exclusive writer** — not both.
+
+```java
+private final ReadWriteLock rwLock = new ReentrantReadWriteLock();
+private final Lock readLock  = rwLock.readLock();
+private final Lock writeLock = rwLock.writeLock();
+private Map<String, String> cache = new HashMap<>();
+
+public String get(String key) {
+    readLock.lock();
+    try {
+        return cache.get(key); // concurrent reads allowed
+    } finally {
+        readLock.unlock();
+    }
+}
+
+public void put(String key, String value) {
+    writeLock.lock();
+    try {
+        cache.put(key, value); // exclusive write
+    } finally {
+        writeLock.unlock();
+    }
+}
+```
+
+**When to use:** Read-heavy workloads (configuration cache, lookup tables). Poor choice when writes are frequent — writer starvation possible with non-fair mode.
+
+**StampedLock (Java 8+):** Even better for read-heavy — supports **optimistic reads** (no lock at all, validate afterward):
+```java
+StampedLock sl = new StampedLock();
+
+// Optimistic read — no lock acquired
+long stamp = sl.tryOptimisticRead();
+double x = this.x, y = this.y;
+if (!sl.validate(stamp)) {        // check if write occurred
+    stamp = sl.readLock();         // fallback to pessimistic read
+    try { x = this.x; y = this.y; }
+    finally { sl.unlockRead(stamp); }
+}
+```
+
+---
+
+### 12. Concurrent Collections
+
+**Never use `Collections.synchronizedXxx()` for compound operations — still needs external sync.**
+
+```java
+// ConcurrentHashMap — segment-level locking (Java 7) / CAS + bin-level sync (Java 8)
+ConcurrentHashMap<String, Integer> map = new ConcurrentHashMap<>();
+map.put("key", 1);
+map.computeIfAbsent("key", k -> expensiveCreate(k)); // atomic
+map.merge("key", 1, Integer::sum);                   // atomic increment
+
+// CopyOnWriteArrayList — writes copy the entire array; reads lock-free
+// Best for: read-heavy, rare writes (event listeners, observer patterns)
+CopyOnWriteArrayList<String> list = new CopyOnWriteArrayList<>();
+
+// BlockingQueue implementations
+BlockingQueue<Task> queue = new LinkedBlockingQueue<>(100); // bounded
+queue.put(task);           // blocks if full
+queue.take();              // blocks if empty
+queue.offer(task, 100, TimeUnit.MILLISECONDS); // timed offer
+queue.poll(100, TimeUnit.MILLISECONDS);        // timed poll
+
+// ArrayBlockingQueue — bounded, array-backed, single lock
+// LinkedBlockingQueue — bounded/unbounded, two locks (head/tail)
+// PriorityBlockingQueue — priority-ordered, unbounded
+// SynchronousQueue — no storage, direct handoff (used in cached thread pool)
+// DelayQueue — elements available only after delay expires
+
+// ConcurrentLinkedQueue — lock-free, CAS-based
+// ConcurrentSkipListMap — sorted, lock-free (TreeMap equivalent)
+```
+
+---
+
+### 13. Atomic Variables
+
+Lock-free thread safety via **Compare-And-Swap (CAS)** CPU instructions:
+
+```java
+AtomicInteger counter = new AtomicInteger(0);
+counter.incrementAndGet();           // ++counter
+counter.getAndIncrement();           // counter++
+counter.addAndGet(5);
+counter.compareAndSet(expected, update); // CAS — returns boolean
+counter.updateAndGet(x -> x * 2);    // lambda update
+
+// AtomicLong, AtomicBoolean, AtomicReference<V>
+AtomicReference<Node> head = new AtomicReference<>(null);
+
+// LongAdder / LongAccumulator (Java 8+) — better throughput than AtomicLong under contention
+// Uses striping (multiple cells) to reduce CAS contention
+LongAdder adder = new LongAdder();
+adder.increment();
+long total = adder.sum(); // slightly imprecise mid-computation but eventually consistent
+```
+
+**CAS internals:**
+```
+while (true) {
+    int current = get();
+    int next = current + 1;
+    if (compareAndSet(current, next)) break; // retry on contention
+}
+```
+
+**AtomicInteger vs LongAdder:** Use `LongAdder` for high-contention counters (metrics, statistics). Use `AtomicInteger` when you need the exact current value for decisions.
+
+---
+
+### 14. Fork/Join Framework
+
+Designed for **divide-and-conquer** parallel algorithms. Uses **work-stealing** — idle threads steal tasks from busy threads' deques.
+
+```java
+// RecursiveTask<V> — returns a value
+class SumTask extends RecursiveTask<Long> {
+    private static final int THRESHOLD = 1000;
+    private final long[] array;
+    private final int start, end;
+
+    SumTask(long[] array, int start, int end) {
+        this.array = array; this.start = start; this.end = end;
+    }
+
+    @Override
+    protected Long compute() {
+        if (end - start <= THRESHOLD) {
+            // Base case — compute directly
+            long sum = 0;
+            for (int i = start; i < end; i++) sum += array[i];
+            return sum;
+        }
+        // Divide
+        int mid = (start + end) / 2;
+        SumTask left = new SumTask(array, start, mid);
+        SumTask right = new SumTask(array, mid, end);
+        left.fork();           // async submit
+        long rightResult = right.compute(); // compute right in current thread
+        long leftResult = left.join();      // wait for left
+        return leftResult + rightResult;
+    }
+}
+
+ForkJoinPool pool = ForkJoinPool.commonPool();
+long sum = pool.invoke(new SumTask(array, 0, array.length));
+
+// RecursiveAction — no return value
+class SortTask extends RecursiveAction {
+    @Override
+    protected void compute() { /* parallel sort */ }
+}
+```
+
+**Work-stealing diagram:**
+```
+Thread 1 deque: [T1, T2, T3]  ← Thread 1 takes from right (T3)
+Thread 2 deque: []             ← Thread 2 steals from Thread 1's left (T1)
+```
+
+**Common Pitfall:** Don't use `ForkJoinPool` for blocking I/O tasks — it starves the pool. For blocking tasks use `ManagedBlocker` or a separate `ThreadPoolExecutor`.
+
+---
+
+### 15. Parallel Streams
+
+Syntactic sugar over Fork/Join for data-parallel operations:
+
+```java
+List<Integer> numbers = IntStream.rangeClosed(1, 1_000_000)
+    .boxed().collect(Collectors.toList());
+
+// Parallel stream — uses ForkJoinPool.commonPool()
+long sum = numbers.parallelStream()
+    .filter(n -> n % 2 == 0)
+    .mapToLong(Integer::longValue)
+    .sum();
+
+// Custom pool to avoid starving common pool
+ForkJoinPool customPool = new ForkJoinPool(4);
+long result = customPool.submit(() ->
+    numbers.parallelStream().mapToLong(n -> compute(n)).sum()
+).get();
+```
+
+**When parallel streams help:**
+- Large datasets (> ~10,000 elements)
+- CPU-bound operations
+- Stateless, independent operations
+
+**When they HURT:**
+- Small datasets (overhead > benefit)
+- I/O-bound operations
+- Stateful operations (sorting, distinct) — require merging
+- Operations with side effects
+- Ordered streams with encounter-order requirements
+
+```java
+// WRONG — side effect in parallel stream
+List<Integer> result = new ArrayList<>();
+stream.parallel().forEach(result::add); // ArrayList not thread-safe!
+
+// RIGHT
+List<Integer> result = stream.parallel().collect(Collectors.toList()); // thread-safe collector
+```
+
+---
+
+### 16. Producer-Consumer Pattern
+
+Fundamental concurrency pattern — decouples producers from consumers using a shared buffer.
+
+```java
+// Implementation 1: BlockingQueue (preferred)
+public class ProducerConsumer {
+    private final BlockingQueue<Task> queue = new LinkedBlockingQueue<>(100);
+
+    class Producer implements Runnable {
+        public void run() {
+            while (!Thread.currentThread().isInterrupted()) {
+                Task task = generateTask();
+                queue.put(task); // blocks if full — natural backpressure
+            }
+        }
+    }
+
+    class Consumer implements Runnable {
+        public void run() {
+            while (!Thread.currentThread().isInterrupted()) {
+                Task task = queue.take(); // blocks if empty
+                process(task);
+            }
+        }
+    }
+}
+
+// Implementation 2: wait/notify (low-level, educational)
+public class BoundedBuffer<T> {
+    private final Queue<T> buffer = new LinkedList<>();
+    private final int capacity;
+
+    public synchronized void produce(T item) throws InterruptedException {
+        while (buffer.size() == capacity) wait(); // release lock, wait
+        buffer.add(item);
+        notifyAll(); // wake sleeping consumers
+    }
+
+    public synchronized T consume() throws InterruptedException {
+        while (buffer.isEmpty()) wait();
+        T item = buffer.poll();
+        notifyAll(); // wake sleeping producers
+        return item;
+    }
+}
+```
+
+**Key rule:** Always `wait()` in a **while loop**, not an `if` — spurious wakeups are real (JVM spec allows them). The while re-checks the condition after wakeup.
+
+---
+
+## Interview Questions — 15 Key Questions
+
+**Q1: What is the difference between `synchronized` and `ReentrantLock`?**
+
+`synchronized` is a built-in language keyword, simpler to use, automatically releases on exit/exception, but lacks features. `ReentrantLock` is an explicit API providing: timed lock attempts (`tryLock`), interruptible locking (`lockInterruptibly`), fairness policy, and multiple `Condition` objects for fine-grained thread coordination. In modern JVMs (JDK 6+) performance is similar. Use `synchronized` for simple cases; `ReentrantLock` when you need those extra capabilities.
+
+---
+
+**Q2: What is a race condition and how do you prevent it?**
+
+A race condition is when program correctness depends on the relative timing of thread execution. Prevention strategies: (1) **Synchronization** — `synchronized` blocks or `ReentrantLock`; (2) **Atomic operations** — `AtomicInteger`, `ConcurrentHashMap.compute()`; (3) **Immutability** — immutable objects can't have races; (4) **Thread confinement** — never share the object; (5) **ThreadLocal** — per-thread copies.
+
+---
+
+**Q3: What does `volatile` guarantee and what doesn't it guarantee?**
+
+`volatile` guarantees **visibility** (writes immediately visible to all threads, no CPU caching) and **ordering** (happens-before between write and read). It does NOT guarantee **atomicity** — `volatile int i; i++` is still a non-atomic read-modify-write. Use `volatile` for single-writer flags; use `AtomicInteger` or `synchronized` when you need atomic compound operations.
+
+---
+
+**Q4: Explain the Java Memory Model's happens-before relationship.**
+
+Happens-before is a guarantee that memory writes by action A are visible to action B. Key rules: (1) Each action in a thread happens-before every subsequent action in that thread; (2) Monitor unlock happens-before subsequent lock of same monitor; (3) `volatile` write happens-before subsequent volatile read of same variable; (4) `Thread.start()` happens-before any action in the started thread; (5) `Thread.join()` — all actions in thread happen-before join returns.
+
+---
+
+**Q5: What's the difference between `wait()` and `sleep()`?**
+
+`wait()` must be called in a `synchronized` block, **releases the lock**, and waits for `notify()/notifyAll()` or a timeout. Used for inter-thread communication. `sleep()` does **not release any locks**, simply pauses the current thread. `sleep()` is a static method on `Thread`; `wait()` is an instance method on `Object`.
+
+---
+
+**Q6: How would you size a thread pool?**
+
+For **CPU-bound** tasks: `N_cpu + 1` threads (extra 1 handles page faults or brief pauses without leaving a core idle). For **I/O-bound** tasks: `N_cpu × (1 + wait_time/service_time)` — e.g., if a thread waits 9ms and works 1ms, use `N_cpu × 10`. In practice, profile and load test. Key non-functional considerations: memory per thread (~512KB stack), task queue size (backpressure), and rejection policies.
+
+---
+
+**Q7: Explain `CompletableFuture.thenCompose()` vs `thenApply()`.**
+
+`thenApply` is like `map` — transforms the result synchronously: `CF<T>` → `CF<U>`. `thenCompose` is like `flatMap` — the transform itself returns a `CompletableFuture<U>`, and it unwraps it: prevents `CompletableFuture<CompletableFuture<U>>`. Use `thenCompose` when chaining async calls that themselves return futures; use `thenApply` for simple synchronous transformations.
+
+---
+
+**Q8: What are spurious wakeups and how do you handle them?**
+
+The JVM specification permits threads waiting in `Object.wait()` to wake up without being explicitly notified (spurious wakeups) — often due to OS-level signal delivery. Always use `wait()` inside a **`while` loop** re-checking the condition, never an `if`. This ensures the thread re-waits if the condition isn't actually satisfied.
+
+---
+
+**Q9: Explain `ConcurrentHashMap` internals and why it's better than `Hashtable`.**
+
+Java 7: Segments (16 by default) each with their own lock — max 16 concurrent writes. Java 8+: Per-bin synchronization using `synchronized` on the first node + CAS for empty bins + tree bins (red-black) when chain length > 8. `Hashtable` synchronizes every method on the entire map — single lock, serializes all operations. `ConcurrentHashMap` allows **full concurrent reads** (no locking) and **concurrent writes** to different bins. Null keys/values not allowed (would break `containsKey`/`get` distinction).
+
+---
+
+**Q10: What is the Fork/Join work-stealing algorithm?**
+
+Each worker thread has a **deque** (double-ended queue). Worker pushes/pops tasks from the bottom (LIFO — good for cache locality). Idle workers **steal** from the **top** of other workers' deques (FIFO — takes oldest/largest subtasks). This reduces contention (stealers and owners work from opposite ends) and naturally balances load. Best for recursive divide-and-conquer — not suitable for blocking I/O.
+
+---
+
+**Q11: How do you detect and fix a deadlock in production?**
+
+**Detection:** `jstack <pid>` dumps thread states and shows "Found one Java-level deadlock"; programmatically use `ThreadMXBean.findDeadlockedThreads()`. **Prevention:** (1) consistent global lock ordering; (2) `tryLock` with timeout; (3) avoid holding locks while calling external code; (4) use higher-level abstractions (`ConcurrentHashMap`, actors). **Recovery:** typically requires JVM restart; design systems to avoid deadlocks architecturally.
+
+---
+
+**Q12: Explain `ThreadLocal` — uses and memory leak risk.**
+
+`ThreadLocal` provides a variable that has an independent copy per thread — useful for per-thread state like database connections, `SimpleDateFormat` instances, or request-scoped context (MDC in logging). Memory leak: if used in a thread pool, the `ThreadLocal` value persists between tasks (thread is reused). **Always** call `threadLocal.remove()` when done, ideally in a `finally` block. In `Spring`, `RequestContextHolder` handles this automatically.
+
+---
+
+**Q13: When would you use `LongAdder` over `AtomicLong`?**
+
+`LongAdder` uses **striping** — maintains multiple cells under contention, threads update different cells, `sum()` aggregates them. Under high concurrency it dramatically outperforms `AtomicLong` (which retries CAS in a spin loop). Use `LongAdder` for metrics/counters where you don't need a precise snapshot mid-update. Use `AtomicLong` when you need the exact current value for a conditional decision (CAS-based state machine, unique ID generation).
+
+---
+
+**Q14: What is the difference between `notify()` and `notifyAll()`?**
+
+`notify()` wakes one arbitrary waiting thread — if that thread's condition isn't satisfied, it re-waits and no other thread wakes up, potentially causing **livelock or missed signals**. `notifyAll()` wakes all waiting threads — they all compete for the lock, check conditions, and only eligible ones proceed. Use `notifyAll()` unless: all waiting threads are waiting on the **same condition** AND **only one thread should proceed** (classic producer-consumer with single condition). Prefer `Condition.signal()` with explicit conditions in `ReentrantLock` for precision.
+
+---
+
+**Q15: What are the issues with `parallelStream()` and the common thread pool?**
+
+`parallelStream()` uses `ForkJoinPool.commonPool()` by default — shared across the entire JVM (including other parallel streams, `CompletableFuture.supplyAsync()` without explicit executor). Problems: (1) pool starvation if tasks block (I/O); (2) pool size = N_cpu-1 by default, unsuitable for I/O; (3) in web servers, parallel streams compete with request-handling threads. Fix: submit to a custom `ForkJoinPool`, or use `CompletableFuture` with a dedicated executor for I/O parallelism.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+### Design Patterns for Concurrency
+- **Immutable Object Pattern** — share freely, zero synchronization cost
+- **Monitor Object** — encapsulate all synchronization within the object
+- **Half-Sync/Half-Async** — sync layer (queuing) + async layer (processing) — foundation of thread pools
+- **Active Object** — decouple method execution from invocation (request as object in queue)
+- **Thread-Specific Storage** — ThreadLocal pattern
+- **Scheduler Pattern** — control order of access (fair lock, priority queues)
+
+### Performance Considerations
+```
+False sharing: Two threads modifying different variables in the same cache line (64 bytes)
+→ causes cache invalidation storms
+→ Fix: @Contended annotation (Java 8+) or manual padding
+
+@sun.misc.Contended  // pads the field to its own cache line
+private volatile long counter;
+```
+
+- **Lock granularity:** Fine-grained = more concurrency but more overhead; coarse-grained = less overhead but serializes more
+- **Lock striping:** `ConcurrentHashMap` strategy — split one lock into N locks by key hash
+- **Amdahl's Law:** Speedup = 1 / (S + P/N) where S = serial fraction. Even 5% serial code limits you to 20× speedup regardless of cores.
+
+### Distributed Concurrency
+- Single-JVM concurrency tools don't work across nodes
+- **Distributed locks:** Redis (Redlock algorithm), Zookeeper, database-level (`SELECT FOR UPDATE`)
+- **Optimistic locking:** Version field in DB row — compare-and-swap at DB level
+- **Event sourcing + CQRS:** Avoid distributed locks entirely via event-driven design
+- **Actor model** (Akka): No shared mutable state — actors communicate via message passing
+
+### Structured Concurrency (Java 21+)
+```java
+// JEP 428/453 — treat groups of tasks as a unit
+try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+    Future<String> user  = scope.fork(() -> fetchUser(id));
+    Future<Order>  order = scope.fork(() -> fetchOrder(id));
+    scope.join().throwIfFailed();
+    return new Response(user.resultNow(), order.resultNow());
+}
+// Scope auto-cancels remaining tasks if any fail — structured lifetime
+```
+
+### Virtual Threads (Java 21)
+- Lightweight threads managed by JVM, not OS — millions possible
+- **Blocking I/O unmounts the carrier thread** (OS thread) — carrier is freed for other virtual threads
+- Near-zero cost per virtual thread (~few hundred bytes vs ~1MB for platform threads)
+- `Thread.ofVirtual().start(() -> handleRequest())` or `Executors.newVirtualThreadPerTaskExecutor()`
+- **Don't pool virtual threads** — creation is cheap; pooling defeats the purpose
+- Still need synchronization for shared mutable state — virtual threads don't solve data races
+
+---
+
+## Summary / Cheat Sheet
+
+```
+VISIBILITY        → volatile, synchronized, Atomic*
+ATOMICITY         → synchronized, Atomic*, locks
+ORDERING          → happens-before, volatile, synchronized
+THREAD-SAFE DATA  → ConcurrentHashMap, CopyOnWriteArrayList, BlockingQueue
+COORDINATION      → CountDownLatch, CyclicBarrier, Semaphore, Phaser
+ASYNC RESULTS     → Future, CompletableFuture
+PARALLEL COMPUTE  → ForkJoinPool, parallelStream()
+ASYNC PIPELINES   → CompletableFuture chains
+BACKPRESSURE      → BlockingQueue.put/take, CallerRunsPolicy
+
+DEADLOCK PREVENTION:
+  1. Consistent lock ordering
+  2. tryLock with timeout
+  3. Avoid nested locks
+
+THREAD POOL SIZING:
+  CPU-bound:  N_cores + 1
+  I/O-bound:  N_cores × (1 + wait/compute)
+
+CHOOSE THE RIGHT TOOL:
+  Single flag?               → volatile boolean
+  Counter with atomicity?    → AtomicLong
+  High-contention counter?   → LongAdder
+  Key-value concurrent?      → ConcurrentHashMap
+  Producer-consumer?         → LinkedBlockingQueue
+  Read-heavy cache?          → ReadWriteLock or StampedLock
+  Divide-and-conquer?        → ForkJoinPool
+  Per-thread state?          → ThreadLocal (+ remove() in finally!)
+  Async with chaining?       → CompletableFuture
+  Millions of I/O tasks?     → Virtual Threads (Java 21+)
+```
+
+**The senior engineer differentiator:** Know not just HOW to synchronize, but WHEN not to — immutability, confinement, and lock-free data structures avoid synchronization entirely, which is always faster and safer than getting it right with locks.
+
+# Java Memory Model & JVM Internals — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+The **Java Memory Model (JMM)** defines how threads interact through memory and what behaviors are legal in concurrent execution. **JVM Internals** covers the runtime architecture that executes bytecode — memory regions, class loading, garbage collection, and JIT compilation.
+
+**Why it matters for senior engineers:**
+- Diagnosing `OutOfMemoryError`, GC pauses, and memory leaks requires deep JVM knowledge
+- Tuning JVM flags for throughput vs latency is a core production responsibility
+- Understanding JIT and escape analysis explains why micro-benchmarks lie
+- JMM explains subtle concurrency bugs that unit tests never catch
+
+**Real-world scenarios:**
+- Production service with 30-second GC stop-the-world pauses → GC tuning
+- Memory usage grows unbounded over days → memory leak investigation
+- Service is fast in benchmarks but slow under load → JIT warm-up, cache effects
+- Kubernetes pod OOMKilled repeatedly → heap vs off-heap misunderstanding
+- Class loading failures in OSGi / plugin systems → classloader hierarchy bugs
+
+---
+
+## Core Concepts
+
+```
+SOURCE (.java)
+     ↓  javac
+BYTECODE (.class)
+     ↓  ClassLoader
+JVM RUNTIME
+  ├── Class Loading Subsystem
+  ├── Runtime Data Areas
+  │    ├── Method Area / Metaspace  (shared)
+  │    ├── Heap                     (shared)
+  │    ├── JVM Stack                (per-thread)
+  │    ├── PC Register              (per-thread)
+  │    └── Native Method Stack      (per-thread)
+  ├── Execution Engine
+  │    ├── Interpreter
+  │    ├── JIT Compiler (C1 + C2)
+  │    └── Garbage Collector
+  └── Native Method Interface (JNI)
+```
+
+**Key JMM rules:**
+- Each thread has its own **working memory** (abstraction over CPU cache/registers)
+- Shared variables live in **main memory** (heap)
+- Threads must read/write through working memory — visibility not guaranteed without synchronization
+- **Happens-before** is the formal ordering guarantee
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. JVM Architecture
+
+**Five runtime data areas:**
+
+```
+┌─────────────────────────────────────────────────┐
+│                  JVM Process                    │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │          SHARED ACROSS THREADS          │    │
+│  │                                         │    │
+│  │  ┌──────────────┐  ┌────────────────┐   │    │
+│  │  │  Metaspace   │  │      Heap      │   │    │
+│  │  │ (class meta) │  │ (all objects)  │   │    │
+│  │  └──────────────┘  └────────────────┘   │    │
+│  └─────────────────────────────────────────┘    │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │        PER-THREAD (Thread 1)            │    │
+│  │  ┌──────────┐ ┌──────┐ ┌────────────┐  │    │
+│  │  │JVM Stack │ │  PC  │ │Native Stack│  │    │
+│  │  └──────────┘ └──────┘ └────────────┘  │    │
+│  └─────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────┘
+```
+
+**Execution Engine components:**
+- **Interpreter** — executes bytecode line by line; slow but immediate startup
+- **JIT Compiler** — compiles hot methods to native code; C1 (client, fast compile) + C2 (server, optimized)
+- **GC** — manages heap lifecycle
+
+**PC Register:** Holds address of the currently executing JVM instruction for each thread. Undefined for native methods.
+
+---
+
+### 2. Heap vs Stack
+
+**Stack (per-thread):**
+```java
+public int compute(int x) {        // ← stack frame created
+    int y = x * 2;                  // y lives on stack
+    Object local = new Object();    // reference on stack, object on HEAP
+    return helper(y);               // new stack frame pushed
+}                                   // frame popped, y gone
+```
+
+```
+Stack Frame contains:
+  ├── Local variable array  (primitives + object references)
+  ├── Operand stack         (working space for bytecode ops)
+  └── Frame data            (constant pool ref, return address)
+```
+
+**Heap (shared):**
+- All `new` expressions allocate here
+- Divided into generations (for generational GCs)
+- Subject to garbage collection
+- Default size: `-Xms` (initial) and `-Xmx` (maximum)
+
+| Property | Stack | Heap |
+|---|---|---|
+| Scope | Per-thread | Shared across threads |
+| Lifetime | Method duration | Until GC collects |
+| Size | Small (~512KB–1MB) | Large (configured) |
+| Allocation | Auto (frame push) | `new` keyword |
+| Error | `StackOverflowError` | `OutOfMemoryError` |
+| Speed | Faster (CPU cache friendly) | Slower (GC overhead) |
+| Stores | Primitives, references | Objects, arrays |
+
+**Common Pitfall:** "Objects are on the heap" — not always true after **escape analysis** (see §11). If JIT proves an object doesn't escape a method, it can be stack-allocated or scalar-replaced.
+
+```java
+// StackOverflowError — unbounded recursion
+public int bad(int n) {
+    return bad(n + 1); // no base case — stack grows until overflow
+}
+
+// OutOfMemoryError: Java heap space
+List<byte[]> leak = new ArrayList<>();
+while (true) leak.add(new byte[1024 * 1024]); // 1MB per iteration
+```
+
+---
+
+### 3. Method Area & Metaspace
+
+**Method Area** (JVM spec term) stores **class-level data:**
+- Class structure (field/method descriptors)
+- Bytecode (method code)
+- Runtime constant pool (symbolic references resolved to direct references)
+- Static variables
+- JIT-compiled native code references
+
+**PermGen (pre-Java 8):**
+- Fixed size in heap (`-XX:MaxPermSize`)
+- Infamous `OutOfMemoryError: PermGen space` — common in app servers with many redeploys
+- Class metadata + interned strings shared the space
+
+**Metaspace (Java 8+):**
+- Moved OUT of heap — uses **native memory** (off-heap)
+- Grows automatically by default (no fixed upper bound)
+- Can still OOM if native memory exhausted
+- Interned strings moved to heap (no longer in Metaspace)
+
+```bash
+# Metaspace flags
+-XX:MetaspaceSize=256m          # Initial metaspace size (triggers GC when hit)
+-XX:MaxMetaspaceSize=512m       # Cap it (prevent runaway native memory)
+-XX:MinMetaspaceFreeRatio=40    # Min % free after GC before expanding
+-XX:MaxMetaspaceFreeRatio=70    # Max % free before shrinking
+```
+
+**Metaspace memory layout:**
+```
+Metaspace
+  ├── Class space    (Klass structures — mirror of java.lang.Class)
+  └── Non-class space (method bytecode, vtables, annotations, etc.)
+```
+
+**Metaspace OOM causes:**
+- Dynamic class generation (CGLIB proxies, Groovy scripts, JSPs) without class unloading
+- Classloader leaks (see §4)
+- Insufficient `MaxMetaspaceSize`
+
+```java
+// Metaspace growth — generating classes at runtime (e.g., Spring proxies)
+// Each call to defineClass() consumes Metaspace
+// Classes are only unloaded when their ClassLoader is GC'd
+```
+
+---
+
+### 4. Class Loaders
+
+**Delegation Model (Parent-First):**
+```
+Bootstrap ClassLoader   (JVM built-in, loads rt.jar / java.*)
+        ↑ parent
+Extension ClassLoader   (loads jre/lib/ext — removed in Java 9+)
+        ↑ parent
+Application ClassLoader (loads classpath — your code)
+        ↑ parent
+Custom ClassLoader      (plugins, OSGi, hot-reload)
+```
+
+**Class loading phases:**
+```
+Loading → Linking → Initialization
+              ↓
+    Verification → Preparation → Resolution
+
+Loading:     Find .class file, read bytes, create Class object
+Verification: Bytecode safety check (no stack overflows, type violations)
+Preparation: Allocate static fields, set default values (0, null, false)
+Resolution:  Symbolic refs → direct refs (optional, lazy)
+Initialization: Run static initializers (<clinit>), set static field values
+```
+
+```java
+// Custom ClassLoader — hot-reload pattern
+public class HotReloadClassLoader extends ClassLoader {
+    @Override
+    protected Class<?> findClass(String name) throws ClassNotFoundException {
+        byte[] bytes = loadClassFromFile(name); // read fresh .class file
+        return defineClass(name, bytes, 0, bytes.length);
+    }
+
+    // To "reload" a class, create a NEW instance of this classloader
+    // Old classloader (and its classes) become eligible for GC
+    // when no strong references remain to it
+}
+
+// Checking which classloader loaded a class
+System.out.println(String.class.getClassLoader()); // null = Bootstrap
+System.out.println(MyClass.class.getClassLoader()); // AppClassLoader
+```
+
+**ClassLoader leak pattern:**
+```java
+// Thread holds reference to context classloader
+// ContextClassLoader → ClassLoader → loaded classes → static fields → large objects
+// If thread never dies (thread pool), ClassLoader never GC'd → Metaspace leak
+
+// Fix: always reset context classloader
+Thread t = Thread.currentThread();
+ClassLoader original = t.getContextClassLoader();
+try {
+    t.setContextClassLoader(targetLoader);
+    doWork();
+} finally {
+    t.setContextClassLoader(original); // restore
+}
+```
+
+**Java 9+ Module System:** Bootstrap loads `java.base`; platform classloader replaces extension; application classloader unchanged. `ClassLoader.getPlatformClassLoader()` replaces extension.
+
+---
+
+### 5. Object Allocation
+
+**TLAB (Thread-Local Allocation Buffer):**
+```
+Heap Eden Space
+┌──────────────────────────────────────────────┐
+│  TLAB T1  │  TLAB T2  │  TLAB T3  │  free   │
+│ [obj][obj]│ [obj]     │[obj][obj] │         │
+└──────────────────────────────────────────────┘
+```
+
+- Each thread gets a private chunk of Eden (~1% of Eden by default)
+- Allocation = **pointer bump** (increment pointer) — extremely fast, no synchronization
+- When TLAB is full, thread requests a new TLAB from the JVM
+- Eliminates contention for object allocation in Eden
+
+```java
+// Object header (on 64-bit JVM, compressed oops enabled)
+// Mark Word:   8 bytes  (hashcode, lock state, GC age)
+// Klass Ptr:  4 bytes   (compressed, points to Metaspace)
+// = 12 bytes header → padded to 16 bytes (8-byte alignment)
+
+// Object sizes
+new Object()              // 16 bytes
+new int[0]                // 16 bytes (header + length field)
+new int[1]                // 20 bytes → padded to 24 bytes
+"Hello"                   // String object + char[] array + padding
+
+// Compressed OOPs (Ordinary Object Pointers)
+// -XX:+UseCompressedOops (default when heap < 32GB)
+// 4-byte references instead of 8-byte → significant memory saving
+// When heap > 32GB, loses compressed oops → sudden 1.5x memory increase
+```
+
+**Allocation fast path:**
+```
+1. Calculate object size
+2. Check if TLAB has space → bump pointer → return address  (fast path, ~2ns)
+3. If not, request new TLAB or allocate directly in Eden
+4. If Eden full → trigger Young GC
+```
+
+---
+
+### 6. Garbage Collection Basics
+
+**Generational hypothesis:** Most objects die young. GC exploits this.
+
+```
+Heap Layout (Generational GC):
+┌────────────────────────────────────────────────────┐
+│                    YOUNG GEN                       │
+│  ┌──────────────┐  ┌──────────┐  ┌──────────┐    │
+│  │    Eden      │  │Survivor 0│  │Survivor 1│    │
+│  │  (new alloc) │  │  (from)  │  │   (to)   │    │
+│  └──────────────┘  └──────────┘  └──────────┘    │
+├────────────────────────────────────────────────────┤
+│                    OLD GEN                         │
+│         (long-lived objects, large objects)        │
+└────────────────────────────────────────────────────┘
+```
+
+**GC types:**
+- **Minor GC** — collects Young Gen; short pause; frequent
+- **Major GC** — collects Old Gen; longer pause; infrequent
+- **Full GC** — collects entire heap + Metaspace; longest pause; avoid in production
+
+**Object lifecycle:**
+```
+1. Allocated in TLAB → Eden
+2. Minor GC: live objects copied to Survivor (age=1)
+3. Subsequent Minor GCs: survivors age++ each time
+4. Age threshold (default 15) → promoted to Old Gen
+5. Old Gen fills → Major/Full GC
+```
+
+**GC Roots (what keeps objects alive):**
+- Local variables on stack frames
+- Static fields
+- Active threads
+- JNI references
+- System class loader loaded classes
+
+**Reachability types:**
+```java
+// Strong reference — default, prevents GC
+Object obj = new Object();
+
+// Soft reference — GC'd only when memory pressure (good for caches)
+SoftReference<byte[]> soft = new SoftReference<>(new byte[1024]);
+
+// Weak reference — GC'd on next collection (good for canonicalization)
+WeakReference<MyClass> weak = new WeakReference<>(instance);
+
+// Phantom reference — enqueued after finalization (good for cleanup)
+PhantomReference<MyClass> phantom = new PhantomReference<>(instance, queue);
+```
+
+---
+
+### 7. GC Algorithms — Deep Dive
+
+**Mark-Sweep:**
+```
+Phase 1 MARK:  traverse from GC roots, mark reachable objects
+Phase 2 SWEEP: reclaim unmarked objects
+
+Problem: heap fragmentation — free space in non-contiguous chunks
+```
+
+**Mark-Sweep-Compact:**
+```
+Phase 3 COMPACT: slide live objects to one end
+Eliminates fragmentation, enables bump-pointer allocation
+Cost: extra pass over heap
+```
+
+**Copying Collection:**
+```
+Split heap into FROM and TO spaces
+Copy live objects from FROM → TO (compacting naturally)
+Swap FROM and TO
+
+Cost: only half the heap usable
+Benefit: fast allocation (bump pointer), no fragmentation
+Used by: Young Gen in most JVMs
+```
+
+**Tri-color marking (used by concurrent GCs):**
+```
+White: not yet visited (candidate for collection)
+Gray:  reachable but children not yet scanned
+Black: reachable and all children scanned
+
+Invariant: black objects must never point directly to white objects
+Violated by mutator (app thread) during concurrent marking → needs write barrier
+```
+
+**Write Barrier** — JVM-inserted code before every reference write:
+```java
+// Conceptually — JIT inserts this around every reference assignment
+void putfield(Object holder, Object ref) {
+    // GC bookkeeping (mark card dirty, SATB buffer, etc.)
+    gcBarrier(holder, ref);
+    // actual write
+    holder.field = ref;
+}
+```
+
+---
+
+### 8. G1, ZGC, Shenandoah
+
+#### G1 (Garbage First) — Java 9+ default
+
+```
+Heap divided into equal-sized regions (~1–32MB, ~2048 regions)
+Each region dynamically assigned role: Eden / Survivor / Old / Humongous
+
+┌───┬───┬───┬───┬───┬───┬───┬───┐
+│ E │ E │ S │ O │ O │ H │ H │ E │  E=Eden, S=Survivor
+├───┼───┼───┼───┼───┼───┼───┼───┤  O=Old, H=Humongous
+│ O │ O │ E │ E │ O │ O │ O │   │
+└───┴───┴───┴───┴───┴───┴───┴───┘
+```
+
+**G1 collection phases:**
+```
+1. Young-only: Minor GC on Eden/Survivor regions (STW)
+2. Concurrent marking: Mark live objects in Old Gen (concurrent)
+   - Initial Mark (STW, piggybacked on Minor GC)
+   - Root Region Scan (concurrent)
+   - Concurrent Mark (concurrent)
+   - Remark (STW, SATB finalization)
+   - Cleanup (STW for accounting, concurrent for freeing)
+3. Mixed GC: Collect young + selected old regions (STW, incremental)
+   → "Garbage First" = prioritize regions with most garbage
+4. Full GC: fallback if Mixed GC can't keep up (single-threaded pre-JDK10)
+```
+
+**Key G1 flags:**
+```bash
+-XX:+UseG1GC
+-XX:MaxGCPauseMillis=200        # Target pause time (soft goal)
+-XX:G1HeapRegionSize=16m        # Region size (power of 2, 1–32MB)
+-XX:G1NewSizePercent=5          # Min young gen %
+-XX:G1MaxNewSizePercent=60      # Max young gen %
+-XX:G1MixedGCLiveThresholdPercent=85  # Only collect old regions below this occupancy
+-XX:InitiatingHeapOccupancyPercent=45 # Start concurrent marking at 45% heap
+```
+
+---
+
+#### ZGC (Z Garbage Collector) — Java 15+ production-ready
+
+**Goal:** Sub-millisecond pause times regardless of heap size (tested to 16TB)
+
+**Key innovations:**
+- **Colored pointers** — 42-bit address + 4 metadata bits (finalizable, remapped, marked0, marked1)
+- **Load barriers** — on every reference read (not just writes), fix stale pointers concurrently
+- **Concurrent relocation** — moves objects while app runs, fixes pointers lazily via load barrier
+
+```
+ZGC Phases (nearly all concurrent):
+1. Pause Mark Start      (STW ~1ms)  — root scanning
+2. Concurrent Mark       (concurrent) — heap traversal
+3. Pause Mark End        (STW ~1ms)  — weak references
+4. Concurrent Relocation Prep        — select relocation sets
+5. Pause Relocate Start  (STW ~1ms)  — root relocation
+6. Concurrent Relocation (concurrent) — move objects
+
+Total STW: ~3ms total (3 pauses × ~1ms each)
+```
+
+```bash
+-XX:+UseZGC
+-XX:SoftMaxHeapSize=28g         # ZGC may use more if needed
+-XX:ZCollectionInterval=5       # Force GC every 5s (prevent stale heap)
+-XX:ZUncommitDelay=300          # Uncommit memory after 5min idle
+```
+
+**ZGC generations (Java 21+):** Generational ZGC adds young/old distinction for better throughput. Use `-XX:+ZGenerational`.
+
+---
+
+#### Shenandoah — Red Hat, available in OpenJDK
+
+**Similar to ZGC:** Concurrent compaction, sub-millisecond pauses
+
+**Key difference from ZGC:** Uses **Brooks forwarding pointers** (extra indirection per object) instead of colored pointers — different trade-off, more heap overhead per object.
+
+```
+Shenandoah unique phase: Concurrent Evacuation
+- Copies objects concurrently
+- Uses forwarding pointer to redirect reads to new location
+- "Update references" phase fixes all pointers afterward
+```
+
+```bash
+-XX:+UseShenandoahGC
+-XX:ShenandoahGCHeuristics=adaptive  # adaptive, static, compact, aggressive
+```
+
+**GC Comparison:**
+
+| GC | Throughput | Latency | Pause Type | Best For |
+|---|---|---|---|---|
+| Serial | Low | High | STW full | Single CPU, tiny heaps |
+| Parallel | High | Medium | STW | Batch, throughput-critical |
+| G1 | Medium-High | Medium | Mostly STW | Balanced (default) |
+| ZGC | Medium | Ultra-low | ~1ms STW | Latency-critical, large heaps |
+| Shenandoah | Medium | Ultra-low | ~1ms STW | Latency-critical |
+
+---
+
+### 9. Memory Leaks
+
+**Java memory leak** = objects not reachable by application logic but still **reachable by GC roots** — GC correctly keeps them alive, they just shouldn't be.
+
+**Common patterns:**
+
+```java
+// 1. Static collection accumulation
+public class Registry {
+    private static final Map<String, Object> cache = new HashMap<>();
+    public static void register(String key, Object val) {
+        cache.put(key, val); // never removed → grows forever
+    }
+}
+
+// 2. Listener/callback not deregistered
+button.addActionListener(e -> useHeavyObject()); // EventDispatchThread holds ref forever
+// Fix: store listener reference, call removeActionListener when done
+
+// 3. ThreadLocal not cleaned up in thread pools
+private static ThreadLocal<LargeObject> tl = new ThreadLocal<>();
+// Thread pool thread reuses → ThreadLocalMap grows → LargeObject never GC'd
+// Fix: always call tl.remove() in finally block
+
+// 4. Inner class holding outer class reference
+class Outer {
+    class Inner implements Runnable { // non-static inner class
+        public void run() { } // implicitly holds Outer.this reference
+    }
+    void startThread() {
+        new Thread(new Inner()).start(); // thread keeps Outer alive
+    }
+}
+// Fix: make Inner static, or use lambda with no outer capture
+
+// 5. Classloader leak (common in app server redeploys)
+// Custom ClassLoader loaded → Thread contextClassLoader = customLoader
+// Thread from pool holds strong ref to classloader
+// Classloader → loaded classes → static fields → all heap objects
+// Fix: reset context classloader, use WeakReference where appropriate
+
+// 6. Unclosed resources → not technically a heap leak but file descriptor leak
+Connection conn = dataSource.getConnection();
+// exception thrown here → conn never closed → connection pool exhausted
+// Fix: try-with-resources
+try (Connection conn = dataSource.getConnection()) { }
+
+// 7. Key with broken equals/hashCode in HashMap
+Map<MutableKey, Value> map = new HashMap<>();
+MutableKey key = new MutableKey("id1");
+map.put(key, value);
+key.setId("id2"); // mutated after insertion → can never find it → leak
+```
+
+**Memory leak investigation tools:**
+```bash
+# Heap dump
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath=/dumps/heap.hprof
+
+jmap -dump:format=b,file=heap.hprof <pid>
+
+# Analyze with MAT (Eclipse Memory Analyzer)
+# Look for: Retained Heap, Dominator Tree, Leak Suspects report
+
+# GC logs for leak detection (heap never shrinks after Full GC)
+-Xlog:gc*:file=gc.log:time,uptime,level,tags
+
+# jcmd
+jcmd <pid> GC.heap_info
+jcmd <pid> VM.native_memory summary
+```
+
+---
+
+### 10. Escape Analysis
+
+JIT analyzes whether an object **escapes** its allocating method or thread:
+
+**Escape states:**
+- **No Escape** — object never leaves method scope
+- **Arg Escape** — object passed to method but doesn't escape that method
+- **Global Escape** — object stored in heap, accessible by other threads
+
+**Optimizations enabled by no-escape:**
+
+```java
+// Scalar Replacement — object fields become local variables (no object created)
+public int sumPoint() {
+    Point p = new Point(3, 4);  // p doesn't escape
+    return p.x + p.y;           // JIT replaces with: return 3 + 4;
+    // No Point object is allocated!
+}
+
+// Stack Allocation — object allocated on stack (collected when frame pops)
+// Java JVM typically uses scalar replacement rather than true stack allocation
+
+// Lock Elision — synchronized on non-escaping object → lock removed entirely
+public String buildString() {
+    StringBuffer sb = new StringBuffer(); // StringBuffer is synchronized
+    sb.append("Hello");   // JIT sees sb doesn't escape
+    sb.append(" World");  // → removes all synchronization — zero lock overhead
+    return sb.toString();
+}
+```
+
+```bash
+# Verify escape analysis decisions
+-XX:+DoEscapeAnalysis          # On by default in Java 8+
+-XX:+PrintEscapeAnalysis       # Print EA results
+-XX:+EliminateAllocations      # Scalar replacement (on by default)
+-XX:+EliminateLocks            # Lock elision (on by default)
+
+# To see JIT decisions
+-XX:+PrintCompilation
+-XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining
+```
+
+**Common Pitfall:** Benchmarking with JMH — if you benchmark a method that creates objects but the result is never used, JIT may eliminate the entire computation. Always consume results via `Blackhole.consume()`.
+
+---
+
+### 11. JIT Compilation
+
+**Tiered compilation (default, Java 8+):**
+```
+Tier 0: Interpreter          — immediate execution, collects profiling data
+Tier 1: C1 simple            — fast compile, no optimization, no profiling
+Tier 2: C1 limited profile   — fast compile, basic profiling (invocation/backedge counts)
+Tier 3: C1 full profile      — compile with full profiling (type profiles, branch data)
+Tier 4: C2 (server)          — aggressive optimization using profiling data
+
+Flow:
+[Method called] → T0 Interpreter
+   invocations > threshold (~1500) → T3 C1 (profiling)
+   profiling data collected → T4 C2 (optimized)
+```
+
+**C2 optimizations:**
+```
+- Inlining          — replace method call with body (most important!)
+- Loop unrolling    — reduce branch overhead
+- Vectorization     — SIMD instructions for array operations
+- Dead code elim    — remove unreachable paths
+- Constant folding  — compute at compile time
+- CHA               — Class Hierarchy Analysis → devirtualization
+- Speculative opts  — assume monomorphic call sites (deoptimize if wrong)
+```
+
+**Inlining — the gateway optimization:**
+```java
+// Without inlining:
+int result = add(x, y); // method call overhead + no cross-method opts
+
+// JIT inlines add():
+// int result = x + y;  // now visible for further optimization
+
+// Inlining thresholds
+-XX:MaxInlineSize=35        // bytecode size limit for trivial inlining
+-XX:FreqInlineSize=325      // bytecode size limit for hot methods
+-XX:MaxInlineLevel=9        // max depth of inline chain
+```
+
+**Deoptimization:**
+```java
+// JIT speculatively compiles assuming Shape is always Circle
+void draw(Shape s) {
+    s.draw(); // profiling: always Circle → devirtualized to Circle.draw()
+}
+
+// Later, a Square is passed → assumption violated
+// JIT deoptimizes → falls back to interpreter → re-profiles → recompiles
+// Observable as: sudden spike in CPU, brief latency increase
+```
+
+**On-Stack Replacement (OSR):**
+- JIT replaces an executing method **while it's running** (within a loop)
+- Allows long-running loops to become JIT-compiled without waiting for next invocation
+
+```bash
+# JIT compilation monitoring
+-XX:+PrintCompilation
+# Output: timestamp  compile_id  flags  method  size  time
+#   321   42   %    3  com.example.Hot::process @ 45 (123 bytes)
+#   ^timestamp  ^id  ^% means OSR  ^tier  ^method  ^OSR_bci  ^size
+
+-XX:CICompilerCount=4       # JIT compiler threads (default: scales with CPU)
+-XX:ReservedCodeCacheSize=256m  # Code cache for compiled methods
+# Code cache full → JIT stops → performance cliff → set large enough
+```
+
+---
+
+### 12. Bytecode Execution
+
+```java
+// Source
+public int add(int a, int b) {
+    return a + b;
+}
+```
+
+```
+// javap -c output (bytecode)
+public int add(int, int);
+  Code:
+     0: iload_1       // push 'a' from local var slot 1 onto operand stack
+     1: iload_2       // push 'b' from local var slot 2
+     2: iadd          // pop a and b, push (a+b)
+     3: ireturn       // return int from top of stack
+```
+
+**Bytecode instruction categories:**
+- `iload/istore` — int local variable ops (`l`=long, `f`=float, `d`=double, `a`=reference)
+- `iadd/isub/imul/idiv` — arithmetic
+- `if_icmpeq/if_icmplt/...` — comparison + branch
+- `invokevirtual` — virtual method dispatch (instance methods, resolved by type)
+- `invokeinterface` — interface method dispatch
+- `invokespecial` — constructors, private, super calls
+- `invokestatic` — static methods
+- `invokedynamic` — runtime-linked (lambdas, method handles — Java 7+)
+- `new/newarray` — object/array creation
+- `getfield/putfield` — instance field access
+- `getstatic/putstatic` — static field access
+- `checkcast/instanceof` — type operations
+- `monitorenter/monitorexit` — intrinsic lock (synchronized)
+
+**`invokedynamic` and lambdas:**
+```java
+// Lambda: () -> System.out.println("hello")
+// Compiled to invokedynamic with LambdaMetafactory bootstrap
+// First invocation: bootstrap creates implementation class dynamically
+// Subsequent: reuses same implementation (hidden class, JVM-managed)
+// No .class file generated in bytecode — generated at runtime
+```
+
+---
+
+### 13. JVM Tuning Basics
+
+**Essential flags taxonomy:**
+
+```bash
+# ═══════════════════════════════════
+# MEMORY SIZING
+# ═══════════════════════════════════
+-Xms4g                           # Initial heap size (set equal to Xmx to avoid resize pauses)
+-Xmx4g                           # Max heap size
+-Xss512k                         # Stack size per thread
+-XX:MetaspaceSize=256m           # Initial Metaspace (also GC trigger threshold)
+-XX:MaxMetaspaceSize=512m        # Metaspace cap
+-XX:MaxDirectMemorySize=1g       # Off-heap (NIO ByteBuffer.allocateDirect)
+
+# ═══════════════════════════════════
+# GC SELECTION
+# ═══════════════════════════════════
+-XX:+UseG1GC                     # G1 (default Java 9+)
+-XX:+UseZGC                      # ZGC (Java 15+ production)
+-XX:+UseShenandoahGC             # Shenandoah
+-XX:+UseParallelGC               # Parallel (throughput-oriented)
+-XX:+UseSerialGC                 # Serial (dev/testing only)
+
+# ═══════════════════════════════════
+# G1 TUNING
+# ═══════════════════════════════════
+-XX:MaxGCPauseMillis=200         # Target max pause (soft goal)
+-XX:G1HeapRegionSize=16m         # Region size
+-XX:InitiatingHeapOccupancyPercent=45  # Start concurrent marking
+-XX:G1ReservePercent=10          # Reserve % to prevent promotion failures
+
+# ═══════════════════════════════════
+# GC LOGGING (Java 9+)
+# ═══════════════════════════════════
+-Xlog:gc*:file=gc.log:time,uptime,level,tags:filecount=10,filesize=50m
+
+# ═══════════════════════════════════
+# DIAGNOSTICS
+# ═══════════════════════════════════
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath=/dumps/
+-XX:+PrintFlagsFinal             # Print all JVM flag values at startup
+-XX:+UnlockDiagnosticVMOptions  # Enable diagnostic flags
+-XX:NativeMemoryTracking=summary # Track off-heap (jcmd VM.native_memory)
+```
+
+**GC tuning process:**
+```
+1. Establish baseline: throughput, latency (p99), heap usage, GC frequency
+2. Enable GC logging: analyze pause times, promotion rates, survivor utilization
+3. Identify problem: too-frequent young GC / long old gen pauses / full GCs
+4. Tune one variable at a time
+5. Load test and verify improvement
+
+Young GC too frequent → increase Xmx or young gen size
+Old gen growing →  promotion rate too high → increase survivor space / tenuring threshold
+Full GC → concurrent marking starting too late → decrease IHOP
+Pause > target → GC can't keep up → try ZGC/Shenandoah, or reduce allocation rate
+```
+
+**Container/Kubernetes tuning:**
+```bash
+# Java 8u191+ / Java 10+ container-aware
+-XX:+UseContainerSupport          # Read cgroup limits (on by default Java 11+)
+-XX:MaxRAMPercentage=75.0         # Use 75% of container memory for heap
+# Don't set -Xmx in containers — use MaxRAMPercentage to adapt to any container size
+
+# Startup optimization
+-XX:TieredStopAtLevel=1          # C1 only — fast startup, slower peak (serverless)
+-XX:+UseSerialGC -Xms32m -Xmx32m # Minimal JVM for tiny lambda functions
+```
+
+---
+
+## Interview Questions — 15 Key Questions
+
+**Q1: What happens when you write `new Object()` in Java, from bytecode to memory?**
+
+The JVM executes `new` bytecode → checks if class is loaded/initialized; if not, triggers class loading. Then: (1) JVM calculates object size (header + fields, aligned to 8 bytes); (2) Fast-path: attempts TLAB bump-pointer allocation in Eden — atomically increments thread's TLAB pointer; (3) If TLAB exhausted, requests new TLAB or allocates directly in Eden with CAS; (4) If Eden full, triggers Young GC; (5) Object header written (mark word + klass pointer); (6) Fields zero-initialized; (7) Constructor (`<init>`) executes; (8) Reference returned to local variable on stack.
+
+---
+
+**Q2: Explain the difference between PermGen and Metaspace.**
+
+PermGen (pre-Java 8) was a fixed-size region within the heap storing class metadata, method bytecode, and interned strings. Its fixed size (`-XX:MaxPermSize`) caused frequent `OutOfMemoryError: PermGen space` in environments with many classes or hot redeployments. Metaspace (Java 8+) moves class metadata to **native memory** (off-heap), grows automatically, and is limited only by available native memory. Interned strings moved to the regular heap. Metaspace can still cause OOM if native memory is exhausted or `MaxMetaspaceSize` is set. Classloader leaks now manifest as Metaspace growth instead of PermGen OOM.
+
+---
+
+**Q3: What is the difference between Minor GC, Major GC, and Full GC?**
+
+Minor GC collects only the Young Generation (Eden + Survivors) — short pause, frequent. All Minor GCs are Stop-The-World but brief because Young Gen is small and copying collection is fast. Major GC collects Old Generation — longer pause because Old Gen is larger and uses mark-sweep-compact. Full GC collects the **entire heap** (Young + Old + Metaspace) — longest pause, should be rare. G1 avoids Full GC by doing concurrent marking + incremental Mixed GCs, but falls back to Full GC if the concurrent cycle can't keep up with allocation.
+
+---
+
+**Q4: How does G1 GC work, and when would you tune it?**
+
+G1 divides the heap into equal-sized regions (~1–32MB) dynamically assigned as Eden, Survivor, Old, or Humongous. It runs concurrent marking to identify Old Gen liveness, then collects regions with the most garbage first (Garbage First). It targets a configurable pause goal (`-XX:MaxGCPauseMillis`). Tune it when: (1) pauses exceed target — decrease `InitiatingHeapOccupancyPercent` to start marking earlier; (2) Humongous allocation is frequent — increase `G1HeapRegionSize` so large objects don't become Humongous; (3) Mixed GCs not freeing enough — tune `G1MixedGCLiveThresholdPercent`; (4) Promotion failures/Full GC — increase `G1ReservePercent` and `MaxGCPauseMillis`.
+
+---
+
+**Q5: What is escape analysis and what optimizations does it enable?**
+
+Escape analysis is a JIT-time analysis determining whether an object's reference can be observed outside its allocating method or thread. If an object **does not escape**: (1) **Scalar replacement** — object is decomposed into primitive fields stored as local variables; no object is heap-allocated; (2) **Lock elision** — `synchronized` on a non-escaping object is completely removed since no other thread can hold it; (3) **Stack allocation** — (JVM typically does scalar replacement instead). Escape analysis is why `new StringBuilder()` in a tight loop doesn't create garbage — JIT eliminates the allocation entirely.
+
+---
+
+**Q6: What is a memory leak in Java and how do you investigate one?**
+
+A Java memory leak is objects the application no longer logically needs but which remain GC-reachable, preventing collection. Symptoms: heap grows after each Full GC, `OutOfMemoryError` after hours/days of uptime. Investigation: (1) Enable GC logging and observe post-Full-GC heap size trend; (2) Take heap dump with `jmap -dump` or `-XX:+HeapDumpOnOutOfMemoryError`; (3) Analyze with Eclipse MAT — Dominator Tree shows what's holding the most memory; Leak Suspects report identifies likely leaks; (4) Look for: large static collections, un-deregistered listeners, ThreadLocal not removed, classloader references in thread pools.
+
+---
+
+**Q7: Explain JIT tiered compilation and why it matters for latency-sensitive applications.**
+
+Java 8+ uses five tiers: Tier 0 (interpreter), Tiers 1–3 (C1 client compiler, varying profiling), Tier 4 (C2 server compiler, maximum optimization). Methods start at Tier 0, profile-count thresholds trigger progressively deeper compilation. Matters for latency: (1) **Cold start** — JVM starts slow (interpreter), warms up over seconds/minutes; (2) **Deoptimization spikes** — when speculative optimizations are invalidated, sudden latency increase; (3) **GraalVM native image** eliminates JIT entirely (AOT), trading peak performance for instant startup — useful for serverless; (4) `-XX:TieredStopAtLevel=1` — C1 only — faster warm-up for serverless at cost of peak throughput.
+
+---
+
+**Q8: How do ZGC and Shenandoah achieve sub-millisecond pauses?**
+
+Both do the bulk of GC work **concurrently** while the application runs. ZGC uses **colored pointers** — 4 bits in the 64-bit pointer encode GC state. A **load barrier** (JIT-inserted code on every reference read) checks these bits and performs fixup (healing) if the pointer is stale after relocation. The only STW pauses are three short root-scanning pauses (~1ms each). Shenandoah uses **Brooks forwarding pointers** — an extra field in each object pointing to the current copy — plus read/write barriers to redirect access. Both sacrifice some throughput (barrier overhead on every read) for dramatically reduced pause times. Neither needs large regions of memory to be STW — they relocate concurrently.
+
+---
+
+**Q9: What causes `OutOfMemoryError: unable to create new native thread`?**
+
+This OOM is NOT a heap issue — it means the OS cannot create more OS threads. Causes: (1) OS-level thread limit (`ulimit -u`); (2) Each thread consumes stack memory from native memory (`-Xss` × thread count); (3) Thread pools not bounded — unlimited task submission creating unlimited threads; (4) In containers, cgroup pid limits. Fix: reduce thread stack size (`-Xss256k`), use bounded thread pools, use virtual threads (Java 21) which multiplex on few OS threads, increase OS limits.
+
+---
+
+**Q10: What is the role of the ClassLoader in Java, and how does the parent-delegation model work?**
+
+ClassLoader locates and loads `.class` files, creating `Class` objects in Metaspace. The parent-delegation model: when a classloader receives a load request, it **first delegates to its parent**; only if parent can't load does it try itself. This ensures core Java classes (loaded by Bootstrap) can't be overridden by user code — prevents `java.lang.String` from being replaced. Class identity = class itself + classloader that loaded it — the same `.class` file loaded by two different classloaders produces two distinct, non-assignable `Class` objects. Breaking delegation (child-first loading) is needed for plugin systems, OSGi, and app server isolation.
+
+---
+
+**Q11: What is the TLAB and why does it make allocation so fast?**
+
+Thread-Local Allocation Buffer is a private chunk of Eden space owned by each thread. Object allocation = **pointer bump**: increment the thread's TLAB end pointer by the object size — no locking, no CAS, ~2ns. Without TLAB, every allocation would require CAS on the shared Eden pointer (high contention). When a TLAB fills, the thread requests a new one from the JVM (rare, requires synchronization). Size is tunable (`-XX:TLABSize`) but JVM auto-sizes it based on allocation rate. Verify TLAB behavior with `-XX:+PrintTLAB`.
+
+---
+
+**Q12: Explain what `invokedynamic` is and how Java lambdas use it.**
+
+`invokedynamic` (Java 7, JEP 276) allows the JVM to delegate method resolution to user-defined bootstrap code at first invocation. For lambdas: the compiler generates an `invokedynamic` instruction with `LambdaMetafactory` as the bootstrap method. At first invocation, `LambdaMetafactory` dynamically generates a class implementing the functional interface, linking it to the lambda body (as a private synthetic method in the enclosing class). Subsequent invocations reuse the generated call site — fast. This approach is superior to anonymous inner classes: no `.class` file generated at compile time, JVM can optimize the implementation strategy, and generated classes can be unloaded when no longer needed.
+
+---
+
+**Q13: What is a "stop-the-world" pause and which GC operations cause it?**
+
+A Stop-The-World (STW) pause halts **all application threads** while the GC performs work. Required because some GC operations need a consistent heap snapshot — running app threads would invalidate it. STW operations: (1) Initial Mark (find GC roots — unavoidably STW); (2) Remark/Final Mark (process references written during concurrent mark); (3) Young GC collection (copying live objects); (4) Full GC (entire heap). Concurrent GCs (G1, ZGC, Shenandoah) minimize STW by doing most work concurrently, only requiring brief STW for root scanning. Detect STW pauses in GC logs: `[GC pause (G1 Evacuation Pause) (young) 350ms]`.
+
+---
+
+**Q14: How would you diagnose and fix frequent Full GCs in production?**
+
+Diagnosis: enable GC logging (`-Xlog:gc*`), monitor heap usage before/after each GC cycle. Frequent Full GC causes: (1) **Promotion failure** — Old Gen full, no room for Young Gen survivors → fix: increase heap, tune `InitiatingHeapOccupancyPercent` lower to reclaim Old Gen earlier; (2) **Humongous allocation** in G1 — objects > 50% region size go directly to Old Gen → fix: increase `G1HeapRegionSize`; (3) **Metadata space full** → fix: increase `MaxMetaspaceSize`; (4) **Heap too small** → fix: increase `Xmx`; (5) **Memory leak** → heap grows continuously → fix: find and eliminate leak. Also check for `System.gc()` calls (suppress with `-XX:+DisableExplicitGC`).
+
+---
+
+**Q15: What is the difference between on-heap and off-heap memory in Java?**
+
+On-heap memory is managed by the JVM and GC — all objects from `new`. Off-heap is native memory outside GC control: (1) `ByteBuffer.allocateDirect()` — direct NIO buffers, freed when ByteBuffer GC'd or explicitly; (2) `Unsafe.allocateMemory()` — manual malloc; (3) Metaspace — class metadata; (4) Code cache — JIT compiled code; (5) Thread stacks; (6) Libraries like MapDB, Chronicle Map for large off-heap data stores. Trade-offs: off-heap avoids GC pressure for large datasets (important for in-memory databases, caches) but requires manual lifecycle management. Monitor with `-XX:NativeMemoryTracking=summary` and `jcmd <pid> VM.native_memory`.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+### GC Tuning for Microservices vs Monoliths
+```
+Microservice (low heap, latency-critical):
+  -XX:+UseZGC or -XX:+UseShenandoahGC
+  -XX:MaxRAMPercentage=75
+  -XX:+UseContainerSupport
+  Consider: GraalVM native image for sub-10ms startup
+
+Monolith / large heap (throughput-critical):
+  -XX:+UseG1GC
+  -Xms8g -Xmx8g                    # pre-size to avoid resize overhead
+  -XX:MaxGCPauseMillis=100
+  Consider: tune IHOP, heap region size, mixed GC thresholds
+
+Batch processing:
+  -XX:+UseParallelGC                # Highest throughput, don't care about pauses
+  -XX:ParallelGCThreads=8
+```
+
+### Java Memory Model — Advanced Ordering
+```java
+// Double-checked locking — classic JMM example
+// BROKEN without volatile (Java 1.4 and earlier)
+class Singleton {
+    private static volatile Singleton instance; // volatile REQUIRED
+
+    public static Singleton getInstance() {
+        if (instance == null) {             // first check (no lock)
+            synchronized (Singleton.class) {
+                if (instance == null) {     // second check (with lock)
+                    instance = new Singleton(); // volatile write — happens-before
+                }                             // any subsequent volatile read
+            }
+        }
+        return instance; // volatile read — sees fully constructed object
+    }
+}
+// Without volatile: 'instance' could be non-null (reference written)
+// but object fields not yet visible (construction reordered)
+```
+
+### Safepoints
+- JVM can only STW at **safepoints** — known, predictable code positions
+- JIT-compiled code has safepoint polls (loop back-edges, method exits)
+- Safepoint bias: threads must reach safepoint before STW pause begins
+- Long safepoint time-to-pause: one thread in a tight loop without safepoint poll
+- `-XX:+PrintSafepointStatistics` — diagnose safepoint issues
+- `–XX:GuaranteedSafepointInterval` — force safepoints periodically
+
+### Object Layout and False Sharing
+```java
+// Object field layout — JVM reorders fields for alignment
+// Order: header (12 bytes) → longs/doubles → ints → shorts → bytes → booleans → references
+
+// False sharing — two variables on same 64-byte cache line
+class Counters {
+    volatile long counterA; // cache line 1
+    volatile long counterB; // SAME cache line → CPU invalidates both on every write
+}
+
+// Fix: padding or @Contended
+@sun.misc.Contended // JDK internal — use with --add-opens in Java 9+
+class PaddedCounterA { volatile long value; }
+class PaddedCounterB { volatile long value; }
+
+// Java 17+ aligned alternative: use VarHandle + explicit layout
+```
+
+### JVM Intrinsics
+- Performance-critical methods replaced by hand-optimized assembly at JIT time
+- Examples: `Arrays.copyOf`, `System.arraycopy`, `String.indexOf`, `Math.sqrt`, `Integer.bitCount`
+- `@HotSpotIntrinsicCandidate` / `@IntrinsicCandidate` annotation marks them
+- Calling these methods triggers direct SIMD/hardware instructions — dramatically faster than equivalent Java
+
+---
+
+## Summary / Cheat Sheet
+
+```
+JVM MEMORY AREAS:
+  Heap         → all objects (GC managed)
+  Metaspace    → class metadata (native memory, Java 8+)
+  Stack        → per-thread frames (primitives + refs)
+  Code Cache   → JIT compiled native code
+  Direct Mem   → ByteBuffer.allocateDirect()
+
+OBJECT LIFECYCLE:
+  new → TLAB Eden → Minor GC survivor → age 15 → Old Gen → Major/Full GC
+
+GC SELECTION:
+  Throughput   → ParallelGC  (-XX:+UseParallelGC)
+  Balanced     → G1          (-XX:+UseG1GC, default Java 9+)
+  Low latency  → ZGC         (-XX:+UseZGC, Java 15+)
+  Low latency  → Shenandoah  (-XX:+UseShenandoahGC)
+
+ERRORS:
+  OutOfMemoryError: Java heap space      → heap too small or leak
+  OutOfMemoryError: Metaspace            → classloader leak or small MetaspaceSize
+  OutOfMemoryError: Direct buffer memory → off-heap limit
+  OutOfMemoryError: unable to create native thread → too many threads / ulimit
+  StackOverflowError                     → infinite recursion or deep recursion
+
+JIT TIERS: 0=Interpreter, 1-3=C1, 4=C2
+ESCAPE ANALYSIS → scalar replacement + lock elision (default on)
+
+KEY FLAGS:
+  -Xms/-Xmx                 heap sizing
+  -Xss                       stack per thread
+  -XX:MaxMetaspaceSize       cap metaspace
+  -XX:MaxRAMPercentage       for containers
+  -XX:MaxGCPauseMillis       G1 pause target
+  -XX:+HeapDumpOnOutOfMemoryError
+  -Xlog:gc*:file=gc.log      GC logging (Java 9+)
+
+MEMORY LEAK CHECKLIST:
+  □ Static Map/List growing unbounded
+  □ Listeners not deregistered
+  □ ThreadLocal.remove() missing
+  □ Non-static inner classes in threads
+  □ ContextClassLoader in thread pool
+  □ Unclosed resources (connections, streams)
+
+TLAB: per-thread Eden chunk → pointer bump allocation → ~2ns, no locks
+SAFEPOINTS: required for STW → all threads must reach safe position
+FALSE SHARING: two volatile fields on same 64-byte cache line → use @Contended
+```
+
+
+# Functional Programming & Streams — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+**Functional Programming (FP)** is a programming paradigm treating computation as the evaluation of mathematical functions, emphasizing **immutability**, **pure functions**, and **declarative style** over imperative control flow.
+
+Java introduced first-class FP support in **Java 8** via lambda expressions, functional interfaces, method references, and the Stream API — fundamentally changing how Java developers write expressive, concise, and parallelizable code.
+
+**Why it matters:**
+- Eliminates boilerplate (anonymous inner classes)
+- Enables lazy evaluation and pipeline composition
+- Unlocks easy parallelism via `parallelStream()`
+- Promotes side-effect-free code that's easier to test and reason about
+- Foundation for reactive programming (RxJava, Project Reactor)
+
+**Real-world applications:**
+- ETL pipelines (filter → transform → collect)
+- Batch data processing (order aggregation, reporting)
+- REST API response transformation
+- Event-driven and reactive microservices
+- Configuration and rule engine evaluation
+
+---
+
+## Core Concepts
+
+1. **Pure Functions** — same input always yields same output, no side effects
+2. **Immutability** — data is not modified; new values are produced
+3. **First-Class Functions** — functions as values, passable as arguments
+4. **Higher-Order Functions** — functions that take or return other functions
+5. **Declarative Style** — *what* to do, not *how* to do it
+6. **Lazy Evaluation** — computation deferred until result is needed
+7. **Function Composition** — chaining small functions to build complex behavior
+8. **Referential Transparency** — expressions can be replaced by their values safely
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. Lambda Expressions
+
+**Definition:** Anonymous functions — a concise way to represent a single method of a functional interface.
+
+**Syntax:**
+```
+(parameters) -> expression
+(parameters) -> { statements; }
+```
+
+**Key Details:**
+- Must match the signature of the target functional interface's single abstract method (SAM)
+- Capture variables from enclosing scope (must be effectively final)
+- `this` inside lambda refers to the **enclosing class**, not the lambda itself
+- No declaration needed — type is inferred by compiler
+
+```java
+// Before Java 8
+Runnable r = new Runnable() {
+    @Override
+    public void run() { System.out.println("Hello"); }
+};
+
+// Lambda equivalent
+Runnable r = () -> System.out.println("Hello");
+
+// With parameters and return
+Comparator<String> comp = (a, b) -> a.compareToIgnoreCase(b);
+
+// Multi-line block body
+Function<Integer, String> describe = n -> {
+    if (n > 0) return "positive";
+    else if (n < 0) return "negative";
+    else return "zero";
+};
+```
+
+**Variable Capture:**
+```java
+String prefix = "Hello"; // effectively final
+Function<String, String> greeter = name -> prefix + ", " + name;
+// prefix = "World"; // compile error — breaks effective finality
+```
+
+**Common Pitfalls:**
+- Mutating captured variables (causes compile error)
+- Overusing lambdas for complex logic — extract to named methods for readability
+- Ignoring checked exceptions — lambdas don't propagate checked exceptions easily
+
+---
+
+### 2. Functional Interfaces
+
+**Definition:** An interface with exactly **one abstract method** (SAM). Annotated with `@FunctionalInterface` (optional but recommended).
+
+**Core Built-in Functional Interfaces (java.util.function):**
+
+| Interface | Method | Description |
+|---|---|---|
+| `Function<T,R>` | `R apply(T t)` | Transform T → R |
+| `BiFunction<T,U,R>` | `R apply(T,U)` | Two inputs → R |
+| `Predicate<T>` | `boolean test(T t)` | Condition check |
+| `Consumer<T>` | `void accept(T t)` | Consumes, no return |
+| `Supplier<T>` | `T get()` | Produces, no input |
+| `UnaryOperator<T>` | `T apply(T t)` | Function<T,T> |
+| `BinaryOperator<T>` | `T apply(T,T)` | BiFunction<T,T,T> |
+
+**Composition Methods:**
+```java
+// Function composition
+Function<Integer, Integer> times2 = x -> x * 2;
+Function<Integer, Integer> plus3  = x -> x + 3;
+
+Function<Integer, Integer> times2ThenPlus3 = times2.andThen(plus3);
+Function<Integer, Integer> plus3ThenTimes2 = times2.compose(plus3);
+
+System.out.println(times2ThenPlus3.apply(5)); // (5*2)+3 = 13
+System.out.println(plus3ThenTimes2.apply(5)); // (5+3)*2 = 16
+
+// Predicate composition
+Predicate<Integer> isEven   = n -> n % 2 == 0;
+Predicate<Integer> isPositive = n -> n > 0;
+
+Predicate<Integer> isEvenAndPositive = isEven.and(isPositive);
+Predicate<Integer> isEvenOrPositive  = isEven.or(isPositive);
+Predicate<Integer> isOdd             = isEven.negate();
+```
+
+**Custom Functional Interface:**
+```java
+@FunctionalInterface
+public interface TriFunction<A, B, C, R> {
+    R apply(A a, B b, C c);
+    
+    // Can have default methods — still functional
+    default <V> TriFunction<A, B, C, V> andThen(Function<R, V> after) {
+        return (a, b, c) -> after.apply(this.apply(a, b, c));
+    }
+}
+
+TriFunction<Integer, Integer, Integer, Integer> sum = (a, b, c) -> a + b + c;
+System.out.println(sum.apply(1, 2, 3)); // 6
+```
+
+**Handling Checked Exceptions:**
+```java
+@FunctionalInterface
+public interface ThrowingFunction<T, R> {
+    R apply(T t) throws Exception;
+    
+    static <T, R> Function<T, R> wrap(ThrowingFunction<T, R> f) {
+        return t -> {
+            try { return f.apply(t); }
+            catch (Exception e) { throw new RuntimeException(e); }
+        };
+    }
+}
+
+// Usage in streams
+List<String> contents = paths.stream()
+    .map(ThrowingFunction.wrap(Files::readString))
+    .collect(Collectors.toList());
+```
+
+**Common Pitfalls:**
+- Adding multiple abstract methods to `@FunctionalInterface` (compile error)
+- Forgetting that `default` and `static` methods are allowed and don't break SAM rule
+- Not wrapping checked exceptions for use in streams
+
+---
+
+### 3. Method References
+
+**Definition:** Shorthand for lambdas that directly call an existing method. Improves readability.
+
+**Four Types:**
+
+```java
+// 1. Static method reference
+// Class::staticMethod
+Function<String, Integer> parser = Integer::parseInt;
+// equivalent: s -> Integer.parseInt(s)
+
+// 2. Instance method reference on a particular instance
+String prefix = "Hello";
+Predicate<String> startsWithHello = prefix::startsWith;
+// equivalent: s -> prefix.startsWith(s)
+
+// 3. Instance method reference on arbitrary instance of a type
+// Class::instanceMethod
+Function<String, String> toUpper = String::toUpperCase;
+// equivalent: s -> s.toUpperCase()
+
+Comparator<String> comp = String::compareToIgnoreCase;
+// equivalent: (a, b) -> a.compareToIgnoreCase(b)
+
+// 4. Constructor reference
+// Class::new
+Supplier<ArrayList<String>> listFactory = ArrayList::new;
+Function<Integer, int[]> arrayFactory = int[]::new;
+// equivalent: size -> new int[size]
+```
+
+**Real usage:**
+```java
+List<String> names = Arrays.asList("Alice", "Bob", "Charlie");
+
+// Static
+names.stream().map(String::valueOf).collect(Collectors.toList());
+
+// Instance on arbitrary type
+names.stream().map(String::toUpperCase).collect(Collectors.toList());
+
+// Constructor
+names.stream().map(StringBuilder::new).collect(Collectors.toList());
+
+// Instance on particular object
+PrintStream out = System.out;
+names.forEach(out::println); // bound instance method reference
+```
+
+**Common Pitfalls:**
+- Confusing Type::instanceMethod with instance::method — different semantics
+- Overusing method references where a lambda is clearer (e.g., complex parameter reordering)
+
+---
+
+### 4. Stream API
+
+**Definition:** A sequence of elements supporting sequential and parallel aggregate operations. Streams are **not data structures** — they don't store data; they process it.
+
+**Stream pipeline anatomy:**
+```
+Source → [Intermediate Operations]* → Terminal Operation
+```
+
+**Key Characteristics:**
+- **Lazy** — intermediate operations don't execute until terminal operation is called
+- **Non-reusable** — a stream can be consumed only once (`IllegalStateException` otherwise)
+- **Internal iteration** — you declare *what*, the API handles *how*
+- **Possibly unbounded** — infinite streams are valid (with appropriate short-circuiting)
+
+**Creating Streams:**
+```java
+// From collection
+List<String> list = List.of("a", "b", "c");
+Stream<String> s1 = list.stream();
+
+// From array
+Stream<String> s2 = Arrays.stream(new String[]{"a","b"});
+
+// From values
+Stream<Integer> s3 = Stream.of(1, 2, 3, 4, 5);
+
+// Infinite streams
+Stream<Integer> naturals = Stream.iterate(0, n -> n + 1);
+Stream<Double> randoms   = Stream.generate(Math::random);
+
+// Finite from iterate (Java 9+)
+Stream<Integer> first10 = Stream.iterate(0, n -> n < 10, n -> n + 1);
+
+// Range (IntStream)
+IntStream range    = IntStream.range(0, 10);    // 0..9
+IntStream rangeClosed = IntStream.rangeClosed(1, 10); // 1..10
+
+// From file lines
+Stream<String> lines = Files.lines(Path.of("data.txt"));
+
+// From string chars
+IntStream chars = "hello".chars();
+
+// Builder
+Stream<String> built = Stream.<String>builder().add("x").add("y").build();
+```
+
+---
+
+### 5. Intermediate Operations
+
+**Definition:** Lazy operations that transform or filter the stream, returning a new stream. Nothing executes until a terminal operation is invoked.
+
+**Stateless Operations** (don't need to see the whole stream):
+
+```java
+List<String> names = List.of("Alice", "Bob", "Charlie", "Anna", "Brian");
+
+// filter — keeps elements matching predicate
+names.stream()
+     .filter(n -> n.startsWith("A"))
+     .forEach(System.out::println); // Alice, Anna
+
+// map — transforms each element (one-to-one)
+names.stream()
+     .map(String::toLowerCase)
+     .forEach(System.out::println);
+
+// mapToInt / mapToLong / mapToDouble — avoids boxing
+int totalLength = names.stream()
+                       .mapToInt(String::length)
+                       .sum();
+
+// flatMap — one-to-many, flattens nested streams
+List<List<String>> nested = List.of(List.of("a","b"), List.of("c","d"));
+nested.stream()
+      .flatMap(Collection::stream)
+      .forEach(System.out::print); // abcd
+
+// peek — for debugging (side-effect, use carefully)
+names.stream()
+     .peek(n -> System.out.println("Before: " + n))
+     .filter(n -> n.length() > 3)
+     .peek(n -> System.out.println("After:  " + n))
+     .collect(Collectors.toList());
+```
+
+**Stateful Operations** (may need to buffer/sort entire stream):
+
+```java
+// distinct — removes duplicates (uses equals/hashCode)
+Stream.of(1,2,2,3,3,3).distinct().forEach(System.out::print); // 123
+
+// sorted — natural order or with comparator
+names.stream().sorted().forEach(System.out::println);
+names.stream().sorted(Comparator.comparingInt(String::length)
+                                 .thenComparing(Comparator.naturalOrder()))
+              .forEach(System.out::println);
+
+// limit — truncate to n elements
+Stream.iterate(1, n -> n + 1).limit(5).forEach(System.out::print); // 12345
+
+// skip — skip first n elements
+Stream.of(1,2,3,4,5).skip(2).forEach(System.out::print); // 345
+
+// takeWhile (Java 9+) — take while predicate true, then stop
+Stream.of(1,2,3,4,5,1,2)
+      .takeWhile(n -> n < 4)
+      .forEach(System.out::print); // 123
+
+// dropWhile (Java 9+)
+Stream.of(1,2,3,4,5,1,2)
+      .dropWhile(n -> n < 4)
+      .forEach(System.out::print); // 4512
+```
+
+**Common Pitfalls:**
+- `sorted()` on a parallel stream forces a merge — expensive
+- `peek()` in production for logic (side effects not guaranteed in parallel)
+- `distinct()` on parallel streams requires expensive coordination
+
+---
+
+### 6. Terminal Operations
+
+**Definition:** Eager operations that trigger the pipeline and produce a result or side-effect. After calling, the stream is consumed.
+
+```java
+List<Integer> nums = List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+
+// forEach / forEachOrdered
+nums.stream().forEach(System.out::println); // unordered in parallel
+nums.stream().forEachOrdered(System.out::println); // preserves order
+
+// collect — most versatile, covered in next section
+List<Integer> evens = nums.stream()
+                          .filter(n -> n % 2 == 0)
+                          .collect(Collectors.toList());
+
+// reduce — fold to single value
+int sum = nums.stream().reduce(0, Integer::sum);
+Optional<Integer> product = nums.stream().reduce((a, b) -> a * b);
+
+// 3-arg reduce for parallel (combiner needed!)
+int parallelSum = nums.parallelStream()
+                      .reduce(0, Integer::sum, Integer::sum);
+
+// count
+long count = nums.stream().filter(n -> n > 5).count();
+
+// min / max — return Optional
+Optional<Integer> max = nums.stream().max(Comparator.naturalOrder());
+Optional<Integer> min = nums.stream().min(Comparator.naturalOrder());
+
+// findFirst / findAny
+Optional<Integer> first = nums.stream().filter(n -> n > 3).findFirst();
+Optional<Integer> any   = nums.parallelStream().filter(n -> n > 3).findAny(); // nondeterministic
+
+// anyMatch / allMatch / noneMatch — short-circuit!
+boolean anyEven  = nums.stream().anyMatch(n -> n % 2 == 0);   // true
+boolean allEven  = nums.stream().allMatch(n -> n % 2 == 0);   // false
+boolean noneNeg  = nums.stream().noneMatch(n -> n < 0);       // true
+
+// toArray
+Object[] arr = nums.stream().filter(n -> n > 5).toArray();
+Integer[] typed = nums.stream().filter(n -> n > 5).toArray(Integer[]::new);
+
+// Numeric terminal operations (on IntStream, LongStream, DoubleStream)
+IntStream intStream = nums.stream().mapToInt(Integer::intValue);
+int total = intStream.sum();
+OptionalDouble avg = nums.stream().mapToInt(Integer::intValue).average();
+IntSummaryStatistics stats = nums.stream().mapToInt(Integer::intValue).summaryStatistics();
+System.out.println(stats.getMax() + " " + stats.getMin() + " " + stats.getAverage());
+```
+
+**Common Pitfalls:**
+- Calling a terminal operation twice on the same stream
+- Using `forEach` when you need a result — use `collect` or `reduce`
+- `reduce` with identity value: identity must be the true identity for the operation (0 for sum, 1 for product)
+
+---
+
+### 7. Collectors
+
+**Definition:** A `Collector` specifies how to accumulate stream elements into a result. `Collectors` utility class provides factory methods.
+
+```java
+record Person(String name, String city, int age, double salary) {}
+
+List<Person> people = List.of(
+    new Person("Alice", "NYC", 30, 90000),
+    new Person("Bob",   "LA",  25, 70000),
+    new Person("Carol", "NYC", 35, 110000),
+    new Person("Dan",   "LA",  28, 80000),
+    new Person("Eve",   "NYC", 22, 60000)
+);
+
+// ─── Basic Collecting ──────────────────────────────────────────────
+
+// toList / toSet / toUnmodifiableList (Java 10+)
+List<String> names = people.stream()
+                            .map(Person::name)
+                            .collect(Collectors.toList());
+
+Set<String> cities = people.stream()
+                            .map(Person::city)
+                            .collect(Collectors.toSet());
+
+// toCollection — specific collection type
+LinkedList<String> linkedNames = people.stream()
+    .map(Person::name)
+    .collect(Collectors.toCollection(LinkedList::new));
+
+// toMap
+Map<String, Integer> nameToAge = people.stream()
+    .collect(Collectors.toMap(Person::name, Person::age));
+
+// toMap with merge function (handle duplicate keys)
+Map<String, Double> cityToMaxSalary = people.stream()
+    .collect(Collectors.toMap(
+        Person::city,
+        Person::salary,
+        Math::max   // merge if duplicate key
+    ));
+
+// ─── Grouping ──────────────────────────────────────────────────────
+
+// groupingBy — produces Map<K, List<V>>
+Map<String, List<Person>> byCity = people.stream()
+    .collect(Collectors.groupingBy(Person::city));
+
+// groupingBy with downstream collector
+Map<String, Long> countByCity = people.stream()
+    .collect(Collectors.groupingBy(Person::city, Collectors.counting()));
+
+Map<String, Double> avgSalaryByCity = people.stream()
+    .collect(Collectors.groupingBy(
+        Person::city,
+        Collectors.averagingDouble(Person::salary)
+    ));
+
+Map<String, Optional<Person>> highestEarnerByCity = people.stream()
+    .collect(Collectors.groupingBy(
+        Person::city,
+        Collectors.maxBy(Comparator.comparingDouble(Person::salary))
+    ));
+
+// Multi-level grouping
+Map<String, Map<String, List<Person>>> grouped = people.stream()
+    .collect(Collectors.groupingBy(
+        Person::city,
+        Collectors.groupingBy(p -> p.age() >= 30 ? "senior" : "junior")
+    ));
+
+// ─── Partitioning ──────────────────────────────────────────────────
+
+// partitioningBy — produces Map<Boolean, List<V>>
+Map<Boolean, List<Person>> partitioned = people.stream()
+    .collect(Collectors.partitioningBy(p -> p.salary() >= 80000));
+
+List<Person> highEarners = partitioned.get(true);
+List<Person> others      = partitioned.get(false);
+
+// ─── String Joining ────────────────────────────────────────────────
+
+String joined = people.stream()
+    .map(Person::name)
+    .collect(Collectors.joining(", ", "[", "]"));
+// [Alice, Bob, Carol, Dan, Eve]
+
+// ─── Statistics ────────────────────────────────────────────────────
+
+DoubleSummaryStatistics salaryStats = people.stream()
+    .collect(Collectors.summarizingDouble(Person::salary));
+
+// ─── Mapping / FlatMapping downstream ──────────────────────────────
+
+// mapping — transform before collecting downstream
+Map<String, List<String>> namesByCity = people.stream()
+    .collect(Collectors.groupingBy(
+        Person::city,
+        Collectors.mapping(Person::name, Collectors.toList())
+    ));
+
+// collectingAndThen — finish with a finisher function
+List<String> unmodifiable = people.stream()
+    .map(Person::name)
+    .collect(Collectors.collectingAndThen(
+        Collectors.toList(),
+        Collections::unmodifiableList
+    ));
+
+// ─── Custom Collector ──────────────────────────────────────────────
+
+// Collector.of(supplier, accumulator, combiner, finisher)
+Collector<Person, ?, Map<String, Double>> salaryCollector = Collector.of(
+    HashMap::new,
+    (map, p) -> map.merge(p.city(), p.salary(), Double::sum),
+    (m1, m2) -> { m2.forEach((k, v) -> m1.merge(k, v, Double::sum)); return m1; },
+    Collections::unmodifiableMap
+);
+
+Map<String, Double> totalSalaryByCity = people.stream().collect(salaryCollector);
+```
+
+**Common Pitfalls:**
+- `toMap` throws `IllegalStateException` on duplicate keys without merge function
+- `groupingBy` doesn't allow null keys — use `toMap` with null handling if needed
+- Forgetting that `groupingBy` downstream collects into `List` by default
+
+---
+
+### 8. Parallel Streams
+
+**Definition:** Streams that split the source, process chunks concurrently on the **ForkJoinPool.commonPool()**, then merge results.
+
+```java
+// Creating parallel streams
+List<Integer> nums = IntStream.rangeClosed(1, 1_000_000)
+                               .boxed()
+                               .collect(Collectors.toList());
+
+long sum1 = nums.parallelStream().mapToLong(Integer::longValue).sum();
+long sum2 = nums.stream().parallel().mapToLong(Integer::longValue).sum(); // same
+
+// Switching back to sequential
+long result = nums.parallelStream()
+                  .filter(n -> n % 2 == 0)
+                  .sequential()   // back to sequential
+                  .mapToLong(n -> n)
+                  .sum();
+```
+
+**When parallel helps:**
+- Large datasets (>10K elements, rule of thumb: `N * Q > threshold` where Q is per-element work)
+- CPU-bound, independent computations
+- Splittable sources (ArrayList, arrays — good; LinkedList — poor)
+- Stateless, associative, non-interfering operations
+
+**When parallel hurts:**
+- Small datasets — thread coordination overhead dominates
+- I/O-bound work — blocks common ForkJoinPool threads
+- Ordered operations (`forEachOrdered`, `findFirst`) — lose parallel benefit
+- Stateful operations (`sorted`, `distinct`) — require synchronization/merge
+- Non-associative reduce operations — wrong results!
+
+```java
+// DANGER: Non-associative — wrong result in parallel!
+// Subtraction is not associative: (a - b) - c ≠ a - (b - c)
+Optional<Integer> wrong = nums.parallelStream().reduce((a, b) -> a - b); // WRONG
+
+// SAFE: Associative operations
+long safeSum = nums.parallelStream().reduce(0L, (a, b) -> a + b, Long::sum);
+
+// DANGER: Shared mutable state — race condition!
+List<Integer> result = new ArrayList<>();
+nums.parallelStream().filter(n -> n % 2 == 0)
+                     .forEach(result::add); // data corruption!
+
+// CORRECT: Use thread-safe collector
+List<Integer> safeResult = nums.parallelStream()
+                               .filter(n -> n % 2 == 0)
+                               .collect(Collectors.toList()); // safe!
+
+// Custom thread pool (avoid polluting commonPool for blocking tasks)
+ForkJoinPool customPool = new ForkJoinPool(4);
+long customResult = customPool.submit(
+    () -> nums.parallelStream().mapToLong(Integer::longValue).sum()
+).get();
+customPool.shutdown();
+```
+
+**Ordering:**
+```java
+// Parallel with ordered source maintains encounter order for collect
+// but not for forEach
+List<Integer> ordered = nums.parallelStream()
+                             .filter(n -> n % 2 == 0)
+                             .collect(Collectors.toList()); // ORDER PRESERVED
+
+nums.parallelStream().forEach(System.out::print); // ORDER NOT GUARANTEED
+nums.parallelStream().forEachOrdered(System.out::print); // order preserved, slower
+```
+
+**Common Pitfalls:**
+- Using parallel on small or I/O-bound streams
+- Shared mutable state causing race conditions
+- Assuming non-associative operations produce correct results
+- Blocking operations on commonPool — use custom ForkJoinPool
+
+---
+
+### 9. Stream Performance
+
+**Laziness and Fusion:**
+```
+Stream pipelines are "fused" — the JVM may process filter+map+limit
+in a single pass rather than materializing intermediate collections.
+```
+
+```java
+// This does NOT create intermediate lists — fused into single pass
+List<String> result = Stream.iterate(1, n -> n + 1)
+    .filter(n -> n % 2 == 0)
+    .map(n -> "Item-" + n)
+    .limit(5)
+    .collect(Collectors.toList());
+// Only 10 elements ever examined (filter rejects odds, stops at 5 evens)
+```
+
+**Short-circuit fusion with limit:**
+```java
+// Without limit: processes all elements
+// With limit: stops early — critical for infinite streams!
+Optional<Integer> first = Stream.iterate(1, n -> n + 1)
+    .filter(n -> n % 100 == 0)
+    .findFirst(); // short-circuits at 100
+```
+
+**Operation ordering matters — put cheapest filters first:**
+```java
+List<Employee> employees = ...; // 1 million records
+
+// SLOW — map (expensive) runs on all, then filter reduces
+employees.stream()
+    .map(Employee::computeExpensiveMetric) // runs 1M times
+    .filter(m -> m > threshold)
+    .collect(Collectors.toList());
+
+// FAST — filter first, map runs only on matches
+employees.stream()
+    .filter(e -> e.getSalary() > threshold) // cheap check
+    .map(Employee::computeExpensiveMetric)  // runs on fewer
+    .collect(Collectors.toList());
+```
+
+**Primitive streams avoid boxing overhead:**
+```java
+// SLOW — Integer boxing/unboxing
+long slowSum = list.stream()
+                   .map(Integer::intValue)  // still boxed
+                   .reduce(0, Integer::sum);
+
+// FAST — no boxing
+long fastSum = list.stream()
+                   .mapToInt(Integer::intValue) // unboxed int primitives
+                   .sum();
+
+// IntStream, LongStream, DoubleStream — always prefer for numeric work
+```
+
+**Spliterator characteristics affect parallelism:**
+```java
+// ArrayList — SIZED, ORDERED, SUBSIZED → excellent parallel splitting
+// HashSet   — SIZED, DISTINCT → good
+// LinkedList — no SUBSIZED → poor (can't efficiently split)
+// Stream.iterate — ORDERED, IMMUTABLE, but not SIZED → poor
+
+// Checking spliterator characteristics
+List<Integer> list = new ArrayList<>(List.of(1,2,3,4,5));
+Spliterator<Integer> sp = list.spliterator();
+System.out.println(sp.hasCharacteristics(Spliterator.SIZED));      // true
+System.out.println(sp.hasCharacteristics(Spliterator.SUBSIZED));   // true
+```
+
+**Benchmarking — always use JMH:**
+```java
+@BenchmarkMode(Mode.AverageTime)
+@OutputTimeUnit(TimeUnit.MILLISECONDS)
+@State(Scope.Thread)
+public class StreamBenchmark {
+    private List<Integer> data;
+    
+    @Setup
+    public void setup() {
+        data = IntStream.rangeClosed(1, 1_000_000).boxed().collect(Collectors.toList());
+    }
+    
+    @Benchmark
+    public long sequentialSum() {
+        return data.stream().mapToLong(Integer::longValue).sum();
+    }
+    
+    @Benchmark
+    public long parallelSum() {
+        return data.parallelStream().mapToLong(Integer::longValue).sum();
+    }
+}
+```
+
+**Performance Rules of Thumb:**
+- Prefer primitive streams for numerical work
+- Filter before mapping
+- Use `limit`/`findFirst` to enable short-circuiting
+- Parallel streams: benefit kicks in around 10K+ simple operations
+- Always benchmark — never assume parallel is faster
+
+---
+
+### 10. Optional Usage
+
+**Definition:** A container that may or may not hold a non-null value. Eliminates null pointer exceptions when used correctly. Not a replacement for all nullable references — use for **return types** of methods that may not have a result.
+
+```java
+// ─── Creating ──────────────────────────────────────────────────────
+Optional<String> present = Optional.of("hello");        // throws NPE if null
+Optional<String> maybe   = Optional.ofNullable(null);   // safe
+Optional<String> empty   = Optional.empty();
+
+// ─── Checking ──────────────────────────────────────────────────────
+present.isPresent(); // true  (avoid overusing — leads to imperative style)
+empty.isEmpty();     // true  (Java 11+)
+
+// ─── Extracting ────────────────────────────────────────────────────
+String val = present.get();   // AVOID — throws NoSuchElementException if empty
+String safe = present.orElse("default");          // always evaluates default
+String lazy = present.orElseGet(() -> compute()); // evaluates only if empty
+String thrown = present.orElseThrow(IllegalStateException::new);
+
+// ─── Transforming ──────────────────────────────────────────────────
+
+// map — if present, apply function; wraps result in Optional
+Optional<Integer> length = present.map(String::length); // Optional[5]
+
+// flatMap — if present, apply function returning Optional (avoids Optional<Optional<T>>)
+Optional<String> city = Optional.of(user)
+    .flatMap(u -> Optional.ofNullable(u.getAddress()))
+    .flatMap(a -> Optional.ofNullable(a.getCity()));
+
+// filter — if present and matches, return same; else empty
+Optional<String> longWord = present.filter(s -> s.length() > 3);
+
+// ifPresent / ifPresentOrElse (Java 9+)
+present.ifPresent(System.out::println);
+present.ifPresentOrElse(
+    System.out::println,
+    () -> System.out.println("empty")
+);
+
+// or — if empty, return another Optional (Java 9+)
+Optional<String> result = empty.or(() -> Optional.of("fallback"));
+
+// stream — convert to Stream (0 or 1 elements, Java 9+)
+long count = present.stream().count(); // 1
+```
+
+**Optional in Streams:**
+```java
+List<Optional<String>> optionals = List.of(
+    Optional.of("Alice"), Optional.empty(), Optional.of("Bob")
+);
+
+// Java 8 way
+List<String> names = optionals.stream()
+    .filter(Optional::isPresent)
+    .map(Optional::get)
+    .collect(Collectors.toList());
+
+// Java 9+ way (cleaner)
+List<String> names9 = optionals.stream()
+    .flatMap(Optional::stream)
+    .collect(Collectors.toList());
+```
+
+**Anti-patterns:**
+```java
+// WRONG — use Optional as method parameter
+void process(Optional<String> name) {...} // just use @Nullable or overload
+
+// WRONG — use Optional in fields (not serializable)
+class User { private Optional<String> email; } // use @Nullable String instead
+
+// WRONG — wrap known non-null in Optional
+Optional.of(someMethod()).get(); // pointless, just use the value directly
+
+// WRONG — isPresent + get
+if (opt.isPresent()) { doSomething(opt.get()); } // use ifPresent()
+
+// WRONG — orElse with side effects
+opt.orElse(expensiveComputation()); // always runs! use orElseGet()
+
+// CORRECT
+opt.orElseGet(() -> expensiveComputation()); // lazy
+```
+
+---
+
+## Interview Questions
+
+**Q1: What is the difference between `map` and `flatMap`?**
+
+`map` applies a one-to-one transformation, wrapping the result in the stream. `flatMap` applies a one-to-many transformation where the mapping function returns a Stream, and those streams are flattened into a single stream. Example: mapping a list of sentences to words requires `flatMap` because each sentence produces multiple words.
+
+```java
+// map produces Stream<Stream<String>>
+Stream<Stream<String>> nested = Stream.of("a b", "c d").map(s -> Arrays.stream(s.split(" ")));
+
+// flatMap produces Stream<String>
+Stream<String> flat = Stream.of("a b", "c d").flatMap(s -> Arrays.stream(s.split(" ")));
+```
+
+---
+
+**Q2: What is the difference between `findFirst` and `findAny`?**
+
+`findFirst` returns the first element in encounter order — deterministic but slower in parallel (requires coordination). `findAny` returns any element — nondeterministic in parallel but faster because any thread can return its result immediately. In sequential streams, `findAny` also returns the first element in practice, but this is not guaranteed by spec.
+
+---
+
+**Q3: Explain the difference between `reduce` with 2 args vs 3 args.**
+
+Two-arg `reduce(identity, accumulator)` returns `T` and works on `Stream<T>` where accumulator combines two T values. Three-arg `reduce(identity, accumulator, combiner)` is for parallel streams where the stream may have been mapped to a different type — the combiner merges partial results from parallel sub-streams back into the result type. The combiner is **only called in parallel**.
+
+```java
+// 3-arg is needed when type changes:
+int sumOfLengths = Stream.of("a", "bb", "ccc")
+    .reduce(0,
+        (sum, str) -> sum + str.length(), // accumulator: (int, String) -> int
+        Integer::sum                       // combiner: (int, int) -> int (parallel only)
+    );
+```
+
+---
+
+**Q4: What is a Spliterator and how does it relate to parallel streams?**
+
+A `Spliterator` (Splittable Iterator) is the mechanism underlying streams for traversal and partitioning. It can split itself into two halves for parallel processing and reports characteristics (`SIZED`, `ORDERED`, `DISTINCT`, `SORTED`, `SUBSIZED`, `IMMUTABLE`, `CONCURRENT`, `NONNULL`). The ForkJoinPool uses `trySplit()` recursively to partition work. ArrayList's spliterator is `SIZED` and `SUBSIZED` so it splits evenly and efficiently; LinkedList's is not `SUBSIZED` so parallel gains are limited.
+
+---
+
+**Q5: Why must lambda-captured variables be effectively final?**
+
+Lambdas may outlive the scope where they're created (e.g., passed to another thread). If captured variables were mutable, concurrent access would cause race conditions. The compiler enforces effective finality to make this safe. The variable doesn't need the `final` keyword — it just can't be reassigned after capture.
+
+---
+
+**Q6: How does lazy evaluation work in streams and why is it important?**
+
+Intermediate operations build a pipeline of operations (a linked chain of `Sink` objects internally) but execute nothing. Only when a terminal operation is invoked does the pipeline execute. This enables: (1) short-circuiting — stopping early when enough data is found, (2) loop fusion — combining multiple operations into a single pass over the data, (3) infinite stream support — you can define streams that would be infinite but only materialize needed elements.
+
+---
+
+**Q7: What is the difference between `Collector` and `reduce`?**
+
+`reduce` is a general-purpose fold — it combines elements into a single immutable value using an associative function. `Collector` is designed for mutable reduction — accumulating into a mutable container like a List, Map, or StringBuilder. `Collector` is more efficient for building collections because it modifies a container in-place rather than creating many intermediate immutable values. Collectors also support parallelism via the combiner function.
+
+---
+
+**Q8: When should you NOT use parallel streams?**
+
+- Small data sets (overhead exceeds gain)
+- I/O-bound operations (blocks ForkJoinPool threads, starving other tasks)
+- Operations requiring ordering (`forEachOrdered`)
+- Non-associative operations (wrong results)
+- Shared mutable state (race conditions)
+- Poor splittability sources (LinkedList, iterator-based)
+- When latency matters more than throughput (parallel adds coordination cost)
+
+---
+
+**Q9: What are the issues with using `peek` in production code?**
+
+`peek` is intended for debugging. Its execution is not guaranteed — with short-circuit terminals like `findFirst`, downstream `peek` may not be called for all elements. In parallel streams, execution order is nondeterministic. Using `peek` for actual logic (state mutation, logging with side effects) creates fragile code that breaks unpredictably. Prefer explicit `map` or `forEach` for logic.
+
+---
+
+**Q10: How does `Optional` differ from null, and when should you NOT use it?**
+
+`Optional` makes the possibility of absence explicit in the type system, forcing callers to handle the empty case. Unlike null, it chains transformations safely. However, do NOT use `Optional` as: method parameters (use overloading or @Nullable), instance fields (not serializable, wastes memory), in collections (use empty collection instead), or when wrapping a value you know is non-null. Optional is best used exclusively as a return type for methods that semantically may not have a result.
+
+---
+
+**Q11: What is the difference between `orElse` and `orElseGet`?**
+
+`orElse(T value)` evaluates the default value eagerly — always, regardless of whether Optional is present. `orElseGet(Supplier<T>)` is lazy — evaluates the supplier only when Optional is empty. When the default is an expensive computation, object construction, or has side effects, always use `orElseGet`.
+
+---
+
+**Q12: Can you use streams with checked exceptions? How do you handle it?**
+
+Streams don't support checked exceptions in lambdas. Solutions: (1) Wrap in a custom functional interface that sneaks throws or wraps in `RuntimeException`, (2) Use `ThrowingFunction` wrapper (shown in earlier snippet), (3) Handle inside the lambda with try-catch. The cleanest approach for production is a utility wrapper that converts checked exceptions to unchecked, preserving the stack trace.
+
+---
+
+**Q13: What's the difference between `Stream.of()` and `Arrays.stream()` for arrays?**
+
+For an `int[]`, `Stream.of(int[])` produces a `Stream<int[]>` (a stream of one array object), while `Arrays.stream(int[])` produces an `IntStream` (stream of primitive ints). Always use `Arrays.stream()` for primitive arrays to avoid boxing issues.
+
+---
+
+**Q14: How does `Collectors.groupingBy` work with parallel streams?**
+
+With parallel streams, `groupingBy` uses a concurrent downstream collection strategy. By default, it produces a non-concurrent collector that merges per-thread maps in the combiner phase — this is safe but involves locking. For better parallel performance use `Collectors.groupingByConcurrent()` which uses `ConcurrentHashMap` and allows concurrent accumulation, but sacrifices encounter order.
+
+---
+
+**Q15: What are `@FunctionalInterface` default methods and how many are allowed?**
+
+A functional interface can have any number of `default` and `static` methods — only the count of **abstract** methods must be exactly one. Default methods provide shared implementation and composition utilities (like `andThen`, `compose` on `Function`). This allows building rich functional interfaces without violating the SAM contract. The `@FunctionalInterface` annotation enforces the SAM constraint at compile time.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+**Function Composition as a Design Pattern:**
+```java
+// Build complex business rules from small composable predicates
+Predicate<Order> isValid    = o -> o.getTotal() > 0;
+Predicate<Order> isPremium  = o -> o.getCustomer().isPremium();
+Predicate<Order> isUrgent   = o -> o.getDueDate().isBefore(LocalDate.now().plusDays(2));
+
+Predicate<Order> shouldFastTrack = isValid.and(isPremium.or(isUrgent));
+
+List<Order> fastTrackOrders = orders.stream()
+    .filter(shouldFastTrack)
+    .collect(Collectors.toList());
+```
+
+**Custom Spliterator for Domain Objects:**
+```java
+// When your data source isn't a standard collection
+class DatabaseSpliterator implements Spliterator<Record> {
+    private final ResultSet rs;
+    
+    @Override public boolean tryAdvance(Consumer<? super Record> action) {
+        try {
+            if (rs.next()) { action.accept(mapRow(rs)); return true; }
+            return false;
+        } catch (SQLException e) { throw new RuntimeException(e); }
+    }
+    
+    @Override public Spliterator<Record> trySplit() { return null; } // not splittable
+    @Override public long estimateSize() { return Long.MAX_VALUE; }
+    @Override public int characteristics() { return ORDERED | NONNULL; }
+}
+```
+
+**Reactive Integration:** Streams are pull-based and synchronous. For async/push-based, bridge to reactive: `Flux.fromStream()` in Project Reactor, `Observable.fromIterable()` in RxJava. Key difference: reactive handles backpressure; streams don't.
+
+**Memory implications of infinite streams:** Infinite streams with `collect` will OOM. Always ensure short-circuiting (`limit`, `findFirst`, `takeWhile`) when working with unbounded sources.
+
+**ForkJoinPool starvation:** Blocking operations (JDBC calls, HTTP) inside `parallelStream()` tie up commonPool threads shared by the entire JVM. Under load, this starves unrelated parallel operations. Use a custom `ForkJoinPool` or CompletableFuture with a dedicated thread pool for I/O.
+
+**Stream vs Iterator performance:** For simple sequential iteration, a for-loop can outperform streams (no lambda dispatch overhead). Streams shine with complex pipelines, parallel execution, and code clarity — not raw single-loop micro-benchmarks.
+
+---
+
+## Summary / Cheat Sheet
+
+```
+LAMBDA           : (params) -> expression  |  (params) -> { body; }
+FUNC INTERFACE   : SAM type — Function, Predicate, Consumer, Supplier, BiFunction
+METHOD REF TYPES : Class::static | instance::method | Class::instance | Class::new
+
+STREAM PIPELINE  : Source → filter → map → sorted → collect
+LAZY RULE        : Nothing runs until terminal is called
+REUSE RULE       : A stream can only be consumed ONCE
+
+INTERMEDIATE (lazy)     : filter, map, flatMap, distinct, sorted, peek, limit, skip
+                          takeWhile, dropWhile (Java 9+)
+TERMINAL (eager)        : collect, forEach, reduce, count, min, max,
+                          findFirst, findAny, anyMatch, allMatch, noneMatch, toArray
+
+KEY COLLECTORS          : toList, toSet, toMap, groupingBy, partitioningBy,
+                          joining, counting, summingInt, averagingDouble,
+                          mapping, collectingAndThen, Collector.of (custom)
+
+PARALLEL RULES          :
+  ✓ Large data, CPU-bound, stateless, associative, splittable source
+  ✗ Small data, I/O-bound, stateful, non-associative, ordered ops needed
+
+OPTIONAL BEST PRACTICES :
+  ✓ Return type for methods that may not produce a value
+  ✓ Chain with map/flatMap/filter
+  ✓ orElseGet() over orElse() for expensive defaults
+  ✗ Fields, parameters, collections
+
+PERFORMANCE TIPS        :
+  - Primitive streams (IntStream) over Stream<Integer> for numbers
+  - Filter early, map late
+  - Short-circuit when possible (limit, findFirst)
+  - Benchmark with JMH before parallelizing
+  - Ordered parallel streams lose most parallel benefit
+
+SENIOR DIFFERENTIATORS  :
+  - Know when NOT to use streams (readability, performance)
+  - Compose functions from small, reusable predicates
+  - Handle checked exceptions cleanly
+  - Understand ForkJoinPool implications
+  - Know spliterator characteristics and their impact
+  - Distinguish mutable reduction (Collector) vs immutable (reduce)
+```
+
+# Reflection & Class Loading — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+**Reflection** is the ability of a program to examine, introspect, and modify its own structure and behavior at runtime — inspecting classes, fields, methods, constructors, and annotations without knowing them at compile time.
+
+**Class Loading** is the mechanism by which the JVM locates, loads, links, and initializes `.class` files into memory, governed by a hierarchy of ClassLoaders.
+
+**Why it matters:**
+- Powers every major Java framework — Spring, Hibernate, JUnit, Jackson all rely heavily on reflection
+- Enables dependency injection, ORM mapping, serialization, and test frameworks
+- Dynamic proxies underpin AOP (Aspect-Oriented Programming), transaction management, and remoting
+- ClassLoader architecture enables hot deployment, plugin systems, OSGi, and application server isolation
+- Understanding these internals separates framework *users* from framework *authors*
+
+**Real-world applications:**
+- Spring IoC container — discovers and wires beans via reflection
+- JPA/Hibernate — maps fields to columns, instantiates entities without `new`
+- JUnit — discovers `@Test` methods and invokes them dynamically
+- Jackson — serializes/deserializes POJOs by introspecting fields/getters
+- Java Agents (APM tools like New Relic) — instrument bytecode at load time
+- Plugin architectures — load third-party JARs at runtime without compile-time dependency
+- Dynamic proxies — Spring `@Transactional`, `@Cacheable`, Mockito mocks
+
+---
+
+## Core Concepts
+
+1. **Class Object** — Every loaded type has exactly one `Class<T>` instance in the JVM per ClassLoader; it's the entry point to all reflection
+2. **ClassLoader Delegation Model** — Parent-first loading prevents class duplication and ensures core JDK classes are always loaded by bootstrap
+3. **Linking Phases** — After loading, classes go through Verification → Preparation → Resolution before Initialization
+4. **Annotations as Metadata** — Retention policy determines whether annotations survive to runtime; only `RUNTIME` retention is accessible via reflection
+5. **Dynamic Proxy** — A proxy class generated at runtime implementing specified interfaces, delegating all calls through an `InvocationHandler`
+6. **Accessibility** — The module system (Java 9+) and security managers restrict reflective access; `setAccessible(true)` bypasses visibility but not module encapsulation without `--add-opens`
+7. **Performance Cost** — Reflection bypasses JIT optimizations, involves method dispatch overhead, and should be cached aggressively
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. Reflection API
+
+**Definition:** The `java.lang.reflect` package provides classes to inspect and manipulate the runtime representation of Java programs.
+
+**Entry Points — Getting a Class object:**
+```java
+// 1. Class literal — compile-time, no exception
+Class<String> c1 = String.class;
+
+// 2. Object instance
+String s = "hello";
+Class<?> c2 = s.getClass(); // runtime type — could be subclass!
+
+// 3. Fully qualified name — runtime, ClassNotFoundException possible
+Class<?> c3 = Class.forName("java.lang.String");
+
+// 4. ClassLoader directly
+Class<?> c4 = Thread.currentThread()
+                     .getContextClassLoader()
+                     .loadClass("com.example.MyClass");
+
+// 5. Primitive and array types
+Class<int[]> intArr = int[].class;
+Class<Void>  voidC  = void.class;
+```
+
+**Inspecting Class Metadata:**
+```java
+Class<?> clazz = ArrayList.class;
+
+// Identity
+System.out.println(clazz.getName());           // java.util.ArrayList
+System.out.println(clazz.getSimpleName());     // ArrayList
+System.out.println(clazz.getCanonicalName());  // java.util.ArrayList
+System.out.println(clazz.getPackageName());    // java.util (Java 9+)
+
+// Type hierarchy
+System.out.println(clazz.getSuperclass());     // class java.util.AbstractList
+System.out.println(Arrays.toString(clazz.getInterfaces())); // List, etc.
+System.out.println(Arrays.toString(clazz.getGenericInterfaces())); // with type params
+
+// Modifiers
+int mods = clazz.getModifiers();
+System.out.println(Modifier.isPublic(mods));   // true
+System.out.println(Modifier.isAbstract(mods)); // false
+
+// Type category checks
+clazz.isInterface();   // false
+clazz.isEnum();        // false
+clazz.isArray();       // false
+clazz.isPrimitive();   // false
+clazz.isRecord();      // false (Java 16+)
+clazz.isAnonymousClass();
+clazz.isMemberClass();
+clazz.isLocalClass();
+```
+
+**Fields:**
+```java
+class Person {
+    public String name;
+    private int age;
+    protected String city;
+}
+
+Class<?> clazz = Person.class;
+
+// getFields()      — public fields, including inherited
+// getDeclaredFields() — all fields declared in THIS class, any visibility
+Field[] publicFields   = clazz.getFields();
+Field[] allFields      = clazz.getDeclaredFields();
+
+Field ageField = clazz.getDeclaredField("age");
+System.out.println(ageField.getName());         // age
+System.out.println(ageField.getType());         // int
+System.out.println(ageField.getGenericType());  // int (useful for List<String>)
+System.out.println(ageField.getModifiers());    // 2 (private)
+
+// Reading and writing fields
+Person person = new Person();
+person.name = "Alice";
+
+Field nameField = clazz.getDeclaredField("name");
+System.out.println(nameField.get(person));  // Alice
+
+ageField.setAccessible(true); // bypass private
+ageField.set(person, 30);
+System.out.println(ageField.get(person));   // 30
+
+// Static field — pass null for instance
+Field staticField = MyClass.getDeclaredField("COUNTER");
+staticField.setAccessible(true);
+int count = (int) staticField.get(null);
+```
+
+**Methods:**
+```java
+class Calculator {
+    public int add(int a, int b) { return a + b; }
+    private String format(double value) { return String.format("%.2f", value); }
+    public static void reset() {}
+}
+
+Class<?> clazz = Calculator.class;
+
+// getMethods()         — public methods including inherited (Object methods too)
+// getDeclaredMethods() — all methods in THIS class, any visibility
+Method[] methods = clazz.getDeclaredMethods();
+
+Method addMethod = clazz.getMethod("add", int.class, int.class);
+System.out.println(addMethod.getName());              // add
+System.out.println(addMethod.getReturnType());        // int
+System.out.println(Arrays.toString(addMethod.getParameterTypes())); // [int, int]
+System.out.println(Arrays.toString(addMethod.getExceptionTypes()));
+
+// Invoking methods
+Calculator calc = new Calculator();
+int result = (int) addMethod.invoke(calc, 3, 4); // 7
+
+// Private method invocation
+Method formatMethod = clazz.getDeclaredMethod("format", double.class);
+formatMethod.setAccessible(true);
+String formatted = (String) formatMethod.invoke(calc, 3.14159); // "3.14"
+
+// Static method — pass null for instance
+Method resetMethod = clazz.getMethod("reset");
+resetMethod.invoke(null);
+
+// Varargs
+Method varMethod = clazz.getDeclaredMethod("process", Object[].class);
+varMethod.invoke(instance, (Object) new Object[]{"a", "b"});
+```
+
+**Constructors:**
+```java
+class User {
+    private String name;
+    private int age;
+    
+    public User() {}
+    private User(String name, int age) { this.name = name; this.age = age; }
+}
+
+Class<?> clazz = User.class;
+
+// No-arg constructor
+Constructor<?> noArg = clazz.getConstructor();
+User u1 = (User) noArg.newInstance();
+
+// Private parameterized constructor
+Constructor<?> paramCtor = clazz.getDeclaredConstructor(String.class, int.class);
+paramCtor.setAccessible(true);
+User u2 = (User) paramCtor.newInstance("Alice", 30);
+
+// Shortcut for no-arg public constructors only
+User u3 = (User) clazz.newInstance(); // DEPRECATED since Java 9 — swallows exceptions!
+
+// Preferred modern approach
+User u4 = clazz.getDeclaredConstructor().newInstance(); // throws precise exceptions
+```
+
+**Generic Type Introspection:**
+```java
+class Repository<T> {
+    private List<T> items;
+    public Map<String, List<T>> index;
+}
+
+// Parameterized type info is erased at runtime for LOCAL variables
+// BUT is preserved in fields, method signatures, and superclass declarations
+
+Field itemsField = Repository.class.getDeclaredField("items");
+Type genericType = itemsField.getGenericType(); // java.util.List<T>
+
+Field indexField = Repository.class.getDeclaredField("index");
+ParameterizedType pt = (ParameterizedType) indexField.getGenericType();
+System.out.println(pt.getRawType());              // interface java.util.Map
+System.out.println(Arrays.toString(pt.getActualTypeArguments())); // [String, List<T>]
+
+// Supertype token trick — recover type parameter at runtime
+class StringList extends ArrayList<String> {} // type preserved in superclass
+Type superType = StringList.class.getGenericSuperclass();
+ParameterizedType paramType = (ParameterizedType) superType;
+Type elementType = paramType.getActualTypeArguments()[0]; // class java.lang.String
+```
+
+**Common Pitfalls:**
+- Calling `getDeclaredMethods()` thinking it includes inherited methods (it doesn't — use `getMethods()` or walk the hierarchy)
+- Forgetting `setAccessible(true)` for private members (throws `IllegalAccessException`)
+- `clazz.newInstance()` (deprecated) — swallows constructor exceptions; use `getDeclaredConstructor().newInstance()`
+- Not caching `Method`/`Field` objects — lookup is expensive; reflection invocation is slower but cacheable
+
+---
+
+### 2. Dynamic Class Loading
+
+**Definition:** Loading classes into the JVM at runtime, not known at compile time. Essential for plugin systems, scripting engines, hot reload, and modular architectures.
+
+```java
+// Basic dynamic loading
+String className = "com.plugins.ReportGenerator"; // from config, DB, etc.
+Class<?> pluginClass = Class.forName(className);
+Object instance = pluginClass.getDeclaredConstructor().newInstance();
+
+// Cast via known interface (compile-time contract, runtime implementation)
+interface ReportGenerator {
+    byte[] generate(Map<String, Object> data);
+}
+
+ReportGenerator generator = (ReportGenerator) instance;
+byte[] report = generator.generate(data);
+```
+
+**Loading from external JAR:**
+```java
+// URLClassLoader — load classes from JAR files at runtime
+URL jarUrl = new File("/plugins/analytics-plugin.jar").toURI().toURL();
+
+// IMPORTANT: parent classloader gives access to app classes (interfaces)
+URLClassLoader pluginLoader = new URLClassLoader(
+    new URL[]{jarUrl},
+    Thread.currentThread().getContextClassLoader() // parent
+);
+
+Class<?> pluginClass = pluginLoader.loadClass("com.analytics.AnalyticsPlugin");
+AnalyticsPlugin plugin = (AnalyticsPlugin) pluginClass.getDeclaredConstructor().newInstance();
+
+// CRITICAL: close when done to release file handles (Java 7+)
+pluginLoader.close();
+```
+
+**Class.forName variants:**
+```java
+// Class.forName(name) — initializes class (runs static blocks)
+Class<?> c1 = Class.forName("com.example.MyClass");
+
+// Class.forName(name, initialize, loader) — control initialization
+Class<?> c2 = Class.forName(
+    "com.example.MyClass",
+    false,    // do NOT run static initializers yet
+    myLoader  // use specific classloader
+);
+// Initialization deferred until first actual use
+
+// Trigger initialization manually
+Class.forName("com.mysql.cj.jdbc.Driver"); // registers JDBC driver via static block
+```
+
+**Service Loader — standard plugin mechanism:**
+```java
+// META-INF/services/com.example.PaymentProcessor file contains:
+// com.stripe.StripeProcessor
+// com.paypal.PayPalProcessor
+
+ServiceLoader<PaymentProcessor> loader = ServiceLoader.load(PaymentProcessor.class);
+for (PaymentProcessor processor : loader) {
+    System.out.println(processor.getClass().getName());
+}
+
+// Java 9+ module-aware ServiceLoader
+ServiceLoader<PaymentProcessor> loader2 = ServiceLoader.load(
+    ModuleLayer.boot(), PaymentProcessor.class
+);
+```
+
+**Hot Reload Pattern:**
+```java
+public class HotReloadingEngine {
+    private volatile Class<?> cachedClass;
+    private volatile long lastLoaded;
+    private final String className;
+    private final URL[] classPath;
+    
+    public Object getReloadedInstance() throws Exception {
+        long lastModified = getClassFileLastModified();
+        if (cachedClass == null || lastModified > lastLoaded) {
+            // Create fresh classloader — old one cannot reload same class!
+            try (URLClassLoader loader = new URLClassLoader(classPath, 
+                     getClass().getClassLoader().getParent())) {
+                cachedClass = loader.loadClass(className);
+                lastLoaded = lastModified;
+            }
+        }
+        return cachedClass.getDeclaredConstructor().newInstance();
+    }
+}
+```
+
+**Common Pitfalls:**
+- Casting across classloader boundaries — same class name, different loaders = different `Class` objects = `ClassCastException`
+- URLClassLoader resource leaks — always close in finally or try-with-resources
+- Static state isolation — each classloader gets its own static field copies
+- `Class.forName` without specifying a loader uses the caller's loader, which may not have access to the target class
+
+---
+
+### 3. ClassLoader Hierarchy
+
+**The Delegation Model (Parent-First):**
+
+```
+Bootstrap ClassLoader (C++ native, loads rt.jar / java.base)
+        ↑ parent
+Platform ClassLoader (Java 9+, formerly Extension CL, loads java.*)
+        ↑ parent
+Application ClassLoader (loads classpath, -cp entries)
+        ↑ parent
+Custom ClassLoaders (URLClassLoader, plugin loaders, etc.)
+```
+
+**How class loading works (delegation algorithm):**
+```
+1. Check if class already loaded in this loader's cache → return if found
+2. Delegate to parent loader → recurse up to bootstrap
+3. If parent can't find it → THIS loader tries to find and load it
+4. If not found → ClassNotFoundException / NoClassDefFoundError
+```
+
+```java
+// Observing classloader hierarchy
+ClassLoader appLoader      = ClassLoader.getSystemClassLoader();
+ClassLoader platformLoader = appLoader.getParent();
+ClassLoader bootstrap      = platformLoader.getParent(); // null — native!
+
+System.out.println(appLoader);      // jdk.internal.loader.ClassLoaders$AppClassLoader
+System.out.println(platformLoader); // jdk.internal.loader.ClassLoaders$PlatformClassLoader
+System.out.println(bootstrap);      // null (bootstrap is native C++)
+
+// Who loaded what?
+System.out.println(String.class.getClassLoader());     // null (bootstrap)
+System.out.println(ArrayList.class.getClassLoader());  // null (bootstrap)
+System.out.println(MyApp.class.getClassLoader());      // AppClassLoader
+```
+
+**Custom ClassLoader:**
+```java
+public class EncryptedClassLoader extends ClassLoader {
+    
+    private final Path classDirectory;
+    
+    public EncryptedClassLoader(Path dir, ClassLoader parent) {
+        super(parent); // ALWAYS pass parent — enables delegation
+        this.classDirectory = dir;
+    }
+    
+    @Override
+    protected Class<?> findClass(String name) throws ClassNotFoundException {
+        // Only called if parent delegation fails
+        String path = name.replace('.', '/') + ".class";
+        Path classFile = classDirectory.resolve(path);
+        
+        try {
+            byte[] encrypted = Files.readAllBytes(classFile);
+            byte[] decrypted = decrypt(encrypted); // custom logic
+            
+            // Define the class from raw bytes
+            return defineClass(name, decrypted, 0, decrypted.length);
+        } catch (IOException e) {
+            throw new ClassNotFoundException("Cannot load " + name, e);
+        }
+    }
+    
+    @Override
+    protected Class<?> loadClass(String name, boolean resolve)
+            throws ClassNotFoundException {
+        
+        synchronized (getClassLoadingLock(name)) {
+            // 1. Check cache
+            Class<?> c = findLoadedClass(name);
+            if (c != null) return c;
+            
+            // 2. Delegate to parent for JDK classes (important!)
+            try {
+                c = getParent().loadClass(name);
+                return c;
+            } catch (ClassNotFoundException e) {
+                // 3. Parent couldn't find it — try this loader
+                c = findClass(name);
+                if (resolve) resolveClass(c);
+                return c;
+            }
+        }
+    }
+    
+    private byte[] decrypt(byte[] data) {
+        // XOR decrypt or AES, etc.
+        return data;
+    }
+}
+```
+
+**Context ClassLoader — solving framework loading problems:**
+```java
+// Problem: Framework code (loaded by AppCL) needs to load user classes
+// Solution: Thread context classloader — set by the thread creator
+
+// Set in application bootstrap
+Thread.currentThread().setContextClassLoader(customLoader);
+
+// Framework code uses it
+ClassLoader cl = Thread.currentThread().getContextClassLoader();
+Class<?> userClass = cl.loadClass("com.user.CustomSerializer");
+
+// JDBC, JNDI, and Java EE use this pattern extensively
+// Spring also uses context classloader for bean loading
+```
+
+**Java 9+ Module System impact:**
+```java
+// Before Java 9: any code could reflect on any class
+// Java 9+: module boundaries restrict reflection
+
+// This may fail without --add-opens:
+Field field = SomeJdkClass.getDeclaredField("privateField");
+field.setAccessible(true); // InaccessibleObjectException!
+
+// JVM flag needed:
+// --add-opens java.base/java.lang=ALL-UNNAMED
+
+// Or programmatically check module access:
+Module targetModule = String.class.getModule();
+Module myModule     = MyClass.class.getModule();
+System.out.println(targetModule.isOpen("java.lang", myModule));
+```
+
+**Common Pitfalls:**
+- Breaking parent delegation — causes duplicate class loading and `ClassCastException`
+- Not synchronizing on `getClassLoadingLock(name)` in custom loaders (race condition)
+- Memory leaks — classloaders hold references to all loaded classes; common in app server hot redeploy
+- Forgetting context classloader in multi-tenant applications
+
+---
+
+### 4. Annotation Processing
+
+**Retention Policies:**
+```java
+@Retention(RetentionPolicy.SOURCE)   // Javadoc, @Override — discarded after compilation
+@Retention(RetentionPolicy.CLASS)    // Default — in .class file, NOT available at runtime
+@Retention(RetentionPolicy.RUNTIME)  // Accessible via reflection at runtime
+```
+
+**Defining Custom Annotations:**
+```java
+// Marker annotation
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.TYPE)
+public @interface Component {
+    String value() default "";
+}
+
+// Rich annotation with multiple elements
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.FIELD, ElementType.METHOD})
+@Documented
+public @interface Inject {
+    boolean required() default true;
+    String qualifier() default "";
+}
+
+// Repeatable annotation (Java 8+)
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+@Repeatable(Roles.class)
+public @interface Role {
+    String value();
+}
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+public @interface Roles {
+    Role[] value();
+}
+
+// Usage
+@Role("ADMIN")
+@Role("MANAGER")
+public void sensitiveOperation() {}
+```
+
+**Reading Annotations at Runtime:**
+```java
+@Component("userService")
+public class UserService {
+    @Inject(required = true, qualifier = "primaryDb")
+    private DataSource dataSource;
+    
+    @Role("ADMIN")
+    @Role("MANAGER")
+    public void deleteUser(long id) {}
+}
+
+Class<?> clazz = UserService.class;
+
+// Class-level annotation
+Component comp = clazz.getAnnotation(Component.class);
+System.out.println(comp.value()); // "userService"
+
+// Check presence
+boolean hasComponent = clazz.isAnnotationPresent(Component.class);
+
+// All annotations on class
+Annotation[] all = clazz.getAnnotations();        // includes inherited
+Annotation[] declared = clazz.getDeclaredAnnotations(); // only on this class
+
+// Field annotation
+Field dsField = clazz.getDeclaredField("dataSource");
+Inject inject = dsField.getAnnotation(Inject.class);
+System.out.println(inject.required());   // true
+System.out.println(inject.qualifier());  // "primaryDb"
+
+// Repeatable annotation
+Method method = clazz.getDeclaredMethod("deleteUser", long.class);
+Role[] roles = method.getAnnotationsByType(Role.class);
+Arrays.stream(roles).map(Role::value).forEach(System.out::println); // ADMIN, MANAGER
+
+// Parameter annotations
+Method m = clazz.getDeclaredMethod("update", String.class, int.class);
+Annotation[][] paramAnnotations = m.getParameterAnnotations();
+for (int i = 0; i < paramAnnotations.length; i++) {
+    System.out.println("Param " + i + ": " + Arrays.toString(paramAnnotations[i]));
+}
+```
+
+**Mini Dependency Injection Engine:**
+```java
+public class SimpleContainer {
+    private final Map<String, Object> beans = new ConcurrentHashMap<>();
+    
+    public void register(Object bean) {
+        Component annotation = bean.getClass().getAnnotation(Component.class);
+        String name = annotation != null && !annotation.value().isEmpty()
+            ? annotation.value()
+            : bean.getClass().getSimpleName();
+        beans.put(name, bean);
+    }
+    
+    public void inject(Object target) throws Exception {
+        Class<?> clazz = target.getClass();
+        for (Field field : getAllFields(clazz)) {
+            Inject inject = field.getAnnotation(Inject.class);
+            if (inject == null) continue;
+            
+            String qualifier = inject.qualifier();
+            Object dependency = qualifier.isEmpty()
+                ? findByType(field.getType())
+                : beans.get(qualifier);
+            
+            if (dependency == null && inject.required()) {
+                throw new RuntimeException("No bean found for: " + field.getName());
+            }
+            
+            field.setAccessible(true);
+            field.set(target, dependency);
+        }
+    }
+    
+    private List<Field> getAllFields(Class<?> clazz) {
+        List<Field> fields = new ArrayList<>();
+        while (clazz != null) {
+            fields.addAll(Arrays.asList(clazz.getDeclaredFields()));
+            clazz = clazz.getSuperclass();
+        }
+        return fields;
+    }
+    
+    private Object findByType(Class<?> type) {
+        return beans.values().stream()
+            .filter(b -> type.isAssignableFrom(b.getClass()))
+            .findFirst().orElse(null);
+    }
+}
+```
+
+**Compile-Time Annotation Processing (APT):**
+```java
+// Runs during javac — generates code, validates constraints
+@SupportedAnnotationTypes("com.example.AutoBuilder")
+@SupportedSourceVersion(SourceVersion.RELEASE_17)
+public class AutoBuilderProcessor extends AbstractProcessor {
+    
+    @Override
+    public boolean process(Set<? extends TypeElement> annotations,
+                           RoundEnvironment roundEnv) {
+        for (TypeElement annotation : annotations) {
+            for (Element element : roundEnv.getElementsAnnotatedWith(annotation)) {
+                if (element.getKind() == ElementKind.CLASS) {
+                    generateBuilder((TypeElement) element);
+                }
+            }
+        }
+        return true; // annotation consumed
+    }
+    
+    private void generateBuilder(TypeElement classElement) {
+        // Use JavaPoet or raw string writing to generate BuilderClass.java
+        // Filer filer = processingEnv.getFiler();
+        // filer.createSourceFile(builderClassName).openWriter()...
+    }
+}
+// Register in META-INF/services/javax.annotation.processing.Processor
+```
+
+**Common Pitfalls:**
+- Using `CLASS` retention when you need `RUNTIME` — annotation invisible at runtime
+- Forgetting `@Target` — annotation can be applied anywhere, causing confusion
+- Annotation arrays/defaults — annotation elements can only be primitives, Strings, Classes, enums, other annotations, or arrays thereof
+- Walking only declared annotations vs. inherited ones (`getAnnotations()` vs `getDeclaredAnnotations()`)
+
+---
+
+### 5. Runtime Introspection
+
+**Definition:** Examining the live state of the JVM — loaded classes, heap usage, threads, module graph — at runtime, beyond just class structure.
+
+**Walking the class hierarchy programmatically:**
+```java
+public class TypeInspector {
+    
+    // Full type lineage
+    public static List<Class<?>> getClassHierarchy(Class<?> clazz) {
+        List<Class<?>> hierarchy = new ArrayList<>();
+        Class<?> current = clazz;
+        while (current != null) {
+            hierarchy.add(current);
+            current = current.getSuperclass();
+        }
+        return hierarchy;
+    }
+    
+    // All interfaces including transitively inherited
+    public static Set<Class<?>> getAllInterfaces(Class<?> clazz) {
+        Set<Class<?>> interfaces = new LinkedHashSet<>();
+        while (clazz != null) {
+            for (Class<?> iface : clazz.getInterfaces()) {
+                interfaces.add(iface);
+                interfaces.addAll(getAllInterfaces(iface)); // recursive for iface parents
+            }
+            clazz = clazz.getSuperclass();
+        }
+        return interfaces;
+    }
+    
+    // Check assignability
+    public static boolean isSubtype(Class<?> child, Class<?> parent) {
+        return parent.isAssignableFrom(child);
+    }
+    
+    // All methods including inherited, deduped by signature
+    public static Map<String, Method> getAllMethods(Class<?> clazz) {
+        Map<String, Method> methods = new LinkedHashMap<>();
+        List<Class<?>> hierarchy = getClassHierarchy(clazz);
+        Collections.reverse(hierarchy); // process superclasses first, subclass overrides
+        for (Class<?> c : hierarchy) {
+            for (Method m : c.getDeclaredMethods()) {
+                String sig = m.getName() + Arrays.toString(m.getParameterTypes());
+                methods.put(sig, m);
+            }
+        }
+        return methods;
+    }
+}
+```
+
+**Bean Property Introspection (JavaBeans Introspector):**
+```java
+class Product {
+    private String name;
+    private double price;
+    
+    public String getName()         { return name; }
+    public void   setName(String n) { this.name = n; }
+    public double getPrice()        { return price; }
+    public void   setPrice(double p){ this.price = p; }
+}
+
+// Using Introspector — higher-level than raw reflection
+BeanInfo beanInfo = Introspector.getBeanInfo(Product.class, Object.class);
+
+Map<String, Object> toMap(Object bean) throws Exception {
+    Map<String, Object> map = new LinkedHashMap<>();
+    BeanInfo info = Introspector.getBeanInfo(bean.getClass(), Object.class);
+    for (PropertyDescriptor pd : info.getPropertyDescriptors()) {
+        Method reader = pd.getReadMethod();
+        if (reader != null) {
+            map.put(pd.getName(), reader.invoke(bean));
+        }
+    }
+    return map;
+}
+
+void fromMap(Object bean, Map<String, Object> data) throws Exception {
+    BeanInfo info = Introspector.getBeanInfo(bean.getClass(), Object.class);
+    for (PropertyDescriptor pd : info.getPropertyDescriptors()) {
+        Method writer = pd.getWriteMethod();
+        if (writer != null && data.containsKey(pd.getName())) {
+            writer.invoke(bean, data.get(pd.getName()));
+        }
+    }
+}
+```
+
+**MethodHandles — Modern Reflection (Java 7+):**
+```java
+// MethodHandles are strongly typed, JIT-friendly, and faster than reflection
+// Think of them as a typed function pointer
+
+MethodHandles.Lookup lookup = MethodHandles.lookup();
+
+// Method handle for instance method
+MethodHandle toUpperCase = lookup.findVirtual(
+    String.class, "toUpperCase", MethodType.methodType(String.class)
+);
+String result = (String) toUpperCase.invoke("hello"); // HELLO
+
+// Static method
+MethodHandle parseInt = lookup.findStatic(
+    Integer.class, "parseInt", MethodType.methodType(int.class, String.class)
+);
+int n = (int) parseInt.invoke("42"); // 42
+
+// Constructor
+MethodHandle ctor = lookup.findConstructor(
+    StringBuilder.class, MethodType.methodType(void.class, String.class)
+);
+StringBuilder sb = (StringBuilder) ctor.invoke("initial");
+
+// Field getter/setter
+MethodHandle getter = lookup.findGetter(Point.class, "x", int.class);
+MethodHandle setter = lookup.findSetter(Point.class, "x", int.class);
+
+Point p = new Point(3, 4);
+int x = (int) getter.invoke(p); // 3
+setter.invoke(p, 10);
+
+// invokeExact vs invoke
+// invokeExact — zero overhead, types MUST match exactly
+// invoke      — allows type conversions, slight overhead
+toUpperCase.invokeExact("hello"); // exact — String return, String param
+toUpperCase.invoke("hello");      // flexible — auto-unboxing/casting
+
+// Binding (partial application)
+MethodHandle bound = toUpperCase.bindTo("hello");
+String r = (String) bound.invoke(); // HELLO
+
+// Var handles (Java 9+) — atomic operations on fields
+VarHandle xHandle = MethodHandles.lookup()
+    .findVarHandle(Point.class, "x", int.class);
+
+xHandle.set(p, 100);
+int xVal = (int) xHandle.get(p); // 100
+
+// Atomic operations via VarHandle
+xHandle.compareAndSet(p, 100, 200); // CAS operation
+xHandle.getAndAdd(p, 5);            // atomic increment
+```
+
+**Common Pitfalls:**
+- Not caching `MethodHandle` objects — lookup is expensive; the handle itself is cheap to call
+- `invokeExact` type mismatch throws `WrongMethodTypeException` — very strict
+- Walking only `getDeclaredMethods()` and missing inherited methods when you need the full API
+
+---
+
+### 6. Dynamic Proxies
+
+**Definition:** A class generated at runtime that implements one or more interfaces, forwarding all method calls to an `InvocationHandler`.
+
+**Core Mechanism:**
+```java
+// InvocationHandler — the heart of every dynamic proxy
+public interface InvocationHandler {
+    Object invoke(Object proxy, Method method, Object[] args) throws Throwable;
+}
+
+// Creating a proxy
+Object proxy = Proxy.newProxyInstance(
+    targetInterface.getClassLoader(),     // classloader for proxy class
+    new Class<?>[]{ TargetInterface.class }, // interfaces to implement
+    handler                               // invocation handler
+);
+```
+
+**Logging Proxy — Cross-cutting concern:**
+```java
+public class LoggingProxy<T> implements InvocationHandler {
+    
+    private final T target;
+    private static final Logger log = LoggerFactory.getLogger(LoggingProxy.class);
+    
+    private LoggingProxy(T target) { this.target = target; }
+    
+    @SuppressWarnings("unchecked")
+    public static <T> T wrap(T target, Class<T> iface) {
+        return (T) Proxy.newProxyInstance(
+            target.getClass().getClassLoader(),
+            new Class<?>[]{ iface },
+            new LoggingProxy<>(target)
+        );
+    }
+    
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        long start = System.nanoTime();
+        log.info(">> {}.{}({})", target.getClass().getSimpleName(),
+                 method.getName(), Arrays.toString(args));
+        try {
+            Object result = method.invoke(target, args);
+            long ms = (System.nanoTime() - start) / 1_000_000;
+            log.info("<< {} returned {} in {}ms", method.getName(), result, ms);
+            return result;
+        } catch (InvocationTargetException e) {
+            log.error("!! {} threw {}", method.getName(), e.getCause().getMessage());
+            throw e.getCause(); // unwrap and rethrow original exception
+        }
+    }
+}
+
+// Usage
+UserService service = new UserServiceImpl();
+UserService proxied  = LoggingProxy.wrap(service, UserService.class);
+proxied.findById(1L); // automatically logged
+```
+
+**Transaction Proxy:**
+```java
+public class TransactionProxy implements InvocationHandler {
+    
+    private final Object target;
+    private final TransactionManager txManager;
+    
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        Transactional txAnnotation = method.getAnnotation(Transactional.class);
+        
+        if (txAnnotation == null) {
+            return method.invoke(target, args); // no transaction needed
+        }
+        
+        Transaction tx = txManager.begin(txAnnotation.propagation());
+        try {
+            Object result = method.invoke(target, args);
+            tx.commit();
+            return result;
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (shouldRollback(txAnnotation, cause)) {
+                tx.rollback();
+            } else {
+                tx.commit(); // e.g. checked exception that isn't rollback-for
+            }
+            throw cause;
+        }
+    }
+    
+    private boolean shouldRollback(Transactional ann, Throwable t) {
+        for (Class<? extends Throwable> rollbackFor : ann.rollbackFor()) {
+            if (rollbackFor.isInstance(t)) return true;
+        }
+        return t instanceof RuntimeException || t instanceof Error;
+    }
+}
+```
+
+**Caching Proxy:**
+```java
+public class CachingProxy<T> implements InvocationHandler {
+    
+    private final T target;
+    private final Map<String, Object> cache = new ConcurrentHashMap<>();
+    
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        Cacheable cacheable = method.getAnnotation(Cacheable.class);
+        
+        if (cacheable == null) return method.invoke(target, args);
+        
+        String key = method.getName() + ":" + Arrays.toString(args);
+        
+        return cache.computeIfAbsent(key, k -> {
+            try {
+                return method.invoke(target, args);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+}
+```
+
+**Proxy Composition — chaining proxies:**
+```java
+// Wrap the same target in multiple proxies — AOP interceptor chain
+UserService base      = new UserServiceImpl(repo);
+UserService cached    = CachingProxy.wrap(base, UserService.class);
+UserService txManaged = TransactionProxy.wrap(cached, UserService.class);
+UserService logged    = LoggingProxy.wrap(txManaged, UserService.class);
+
+// Call order: logged → txManaged → cached → base
+logged.findById(1L);
+```
+
+**CGLIB Proxies — when you can't use interfaces:**
+```java
+// Java dynamic proxies require an interface.
+// CGLIB (used by Spring) subclasses concrete classes instead.
+
+// Conceptual — real CGLIB usage
+Enhancer enhancer = new Enhancer();
+enhancer.setSuperclass(UserService.class); // concrete class, no interface needed!
+enhancer.setCallback((MethodInterceptor) (obj, method, args1, proxy) -> {
+    System.out.println("Before: " + method.getName());
+    Object result = proxy.invokeSuper(obj, args1);
+    System.out.println("After: " + method.getName());
+    return result;
+});
+UserService proxy = (UserService) enhancer.create();
+// LIMITATION: cannot proxy final classes or final methods
+```
+
+**Detecting and unwrapping proxies:**
+```java
+// Check if something is a proxy
+boolean isProxy = Proxy.isProxyClass(obj.getClass());
+// or in Spring:
+boolean isSpringProxy = AopUtils.isAopProxy(myBean);
+
+// Get the handler
+if (isProxy) {
+    InvocationHandler handler = Proxy.getInvocationHandler(obj);
+}
+
+// Unwrap Spring AOP proxy to get real target
+Object target = ((Advised) springProxy).getTargetSource().getTarget();
+```
+
+**Common Pitfalls:**
+- JDK proxies only proxy **interfaces** — `ClassCastException` if you pass the concrete class in
+- Self-invocation problem — when a proxied bean calls its own methods, the proxy is bypassed (classic Spring `@Transactional` trap)
+- `InvocationTargetException` wrapping — always unwrap with `e.getCause()` before rethrowing
+- Proxy method does NOT have the annotations of the original implementation — must look at the target's method for annotation-driven behavior
+- Final classes/methods break CGLIB — Spring beans must be non-final for proxy-based AOP
+
+---
+
+## Interview Questions
+
+**Q1: What is the difference between `getMethod` and `getDeclaredMethod`?**
+
+`getMethod(name, params)` searches for a `public` method with that signature across the entire class hierarchy — including inherited methods from superclasses and interfaces. `getDeclaredMethod(name, params)` searches only within the **current class** itself for any visibility (public, private, protected, package-private), but does NOT include inherited methods. To find a private inherited method, you must walk the class hierarchy manually calling `getDeclaredMethod` on each superclass.
+
+---
+
+**Q2: What is the parent delegation model and why is it important?**
+
+When a ClassLoader is asked to load a class, it first delegates to its parent. Only if the parent fails does the child attempt to load it itself. This ensures: (1) JDK core classes (java.lang.String) are always loaded by bootstrap, preventing malicious or accidental replacement; (2) classes shared across the app are loaded once, avoiding duplicate type identity; (3) security — untrusted code can't shadow trusted classes. Breaking this model (child-first loaders like some application servers) is done deliberately for isolation but requires careful handling of shared types.
+
+---
+
+**Q3: What causes `ClassCastException` when using `Class.forName` or custom classloaders?**
+
+When the same fully qualified class name is loaded by two **different** ClassLoader instances, the JVM treats them as completely different types. Assigning an object loaded by ClassLoader A to a variable typed by the class from ClassLoader B throws `ClassCastException`, even though the class names are identical. Solution: ensure the shared interface or supertype is loaded by a common parent loader, and only the implementation classes are loaded by child loaders.
+
+---
+
+**Q4: How does Spring's `@Transactional` work internally?**
+
+Spring creates a dynamic proxy (JDK proxy if the bean implements an interface, CGLIB subclass proxy otherwise) around the bean. When a `@Transactional` method is called through the proxy, the `TransactionInterceptor` (an `InvocationHandler`/`MethodInterceptor`) begins a transaction, invokes the real method, then commits or rolls back based on the outcome and rollback rules. The critical implication is that **self-invocation** — a bean calling its own `@Transactional` method directly — bypasses the proxy entirely and no transaction is started.
+
+---
+
+**Q5: What is the difference between `Proxy.newProxyInstance` and CGLIB proxies?**
+
+JDK dynamic proxies require the target to implement at least one interface — the proxy implements those same interfaces. CGLIB proxies work by generating a subclass of the target's concrete class at runtime using bytecode manipulation, so no interface is required. CGLIB is more versatile but cannot proxy `final` classes or `final` methods. Spring uses JDK proxies when an interface is available and falls back to CGLIB (or always uses CGLIB with `proxyTargetClass = true`).
+
+---
+
+**Q6: What is `InvocationTargetException` and how should you handle it?**
+
+When `Method.invoke()` is called and the invoked method throws an exception, reflection wraps it in `InvocationTargetException`. The original exception is the **cause** (`e.getCause()`). In proxy implementations you should always unwrap it: `throw e.getCause()` — otherwise callers see an unexpected `InvocationTargetException` instead of the real business exception. Be careful to handle `Throwable` types: checked exceptions must be declared on the invoking method or re-wrapped.
+
+---
+
+**Q7: Explain `setAccessible(true)` and its implications post Java 9.**
+
+`setAccessible(true)` bypasses Java's visibility checks (private, protected), allowing reflection to read/write private fields or invoke private methods. Pre-Java 9, this worked universally with a `SecurityManager` permission check. Post-Java 9, the **module system** adds a layer: even with `setAccessible(true)`, if the module containing the class doesn't `open` the package to your module, you get `InaccessibleObjectException`. This must be resolved with `--add-opens module/package=ALL-UNNAMED` JVM flags or proper `module-info.java` `opens` declarations.
+
+---
+
+**Q8: What is the difference between `MethodHandle` and `Method.invoke`?**
+
+`Method.invoke()` uses reflection: it's polymorphic, involves security checks on every call, produces boxing overhead for primitives, and is difficult for the JIT to optimize. `MethodHandle` is part of `java.lang.invoke` and is designed to be JIT-friendly — the JIT can inline and optimize method handle invocations similar to regular calls. `invokeExact()` on a `MethodHandle` has zero overhead. The tradeoff: `MethodHandle` is strongly typed and harder to use generically. For hot code paths, always prefer `MethodHandle` over `Method.invoke`.
+
+---
+
+**Q9: How would you implement a simple bean mapper using reflection?**
+
+Walk the source object's class hierarchy collecting `getDeclaredFields()`. For each field in the target class with a matching name and compatible type, use `setAccessible(true)` and copy the value. Cache the `Field` objects by class pair to avoid repeated reflection lookups. For production, handle type conversions, nested objects, and collections. Libraries like MapStruct do this at **compile time** via APT (annotation processing) generating direct setter calls — zero runtime reflection cost — which is why they outperform reflection-based mappers significantly.
+
+---
+
+**Q10: What is a Spliterator? What does it have to do with classloading?**
+
+Nothing — a common interviewer curveball. Spliterators are stream-related. The relevant concept here is `ServiceLoader`, which uses classloading to discover implementations. `ServiceLoader.load(Interface.class)` scans `META-INF/services/` entries in the classpath for registered implementations and lazily loads them using the thread context classloader. This is the standard Java plugin/SPI mechanism, underlying JDBC drivers, logging frameworks, and Java EE providers.
+
+---
+
+**Q11: What is the self-invocation proxy problem and how do you solve it?**
+
+When a Spring bean calls one of its own methods (e.g., `this.someMethod()`), the call goes directly to the concrete object, not through the proxy. Any AOP advice (transactions, caching, security) on `someMethod` is completely skipped. Solutions: (1) Inject a self-reference (`@Autowired` the bean into itself — works in Spring with circular reference handling); (2) Retrieve the proxy from ApplicationContext (`AopContext.currentProxy()`); (3) Refactor to move the method into a separate bean; (4) Use AspectJ compile-time or load-time weaving which instruments the bytecode directly, bypassing the proxy entirely.
+
+---
+
+**Q12: How do you prevent ClassLoader memory leaks in web applications?**
+
+Each web app deployment creates a new ClassLoader. Memory leaks occur when GC can't collect the old ClassLoader because live references still point to it: (1) Static fields in libraries holding references to app classes; (2) Thread-local variables not cleaned up (the thread lives beyond the app's lifecycle); (3) JDBC drivers registered in `DriverManager` but never deregistered; (4) Shutdown hooks referencing app classes. Solutions: deregister drivers in `ServletContextListener.contextDestroyed()`, clean up ThreadLocals, use weak references for caches, and audit third-party libraries for static singletons.
+
+---
+
+**Q13: What annotation retention policy should you use and when?**
+
+`SOURCE` — for compile-time hints only: `@Override`, `@SuppressWarnings`, Lombok annotations. `CLASS` — default; written to bytecode, used by bytecode tools (ASM, instrumentation agents) that process `.class` files directly without running the class. `RUNTIME` — when you need to read the annotation via reflection at runtime: Spring `@Component`, JUnit `@Test`, custom framework annotations. Most framework annotations must be `RUNTIME`. A common mistake is forgetting to set `RUNTIME` and then finding `getAnnotation()` returns null.
+
+---
+
+**Q14: What is the difference between `getAnnotations()` and `getDeclaredAnnotations()`?**
+
+`getDeclaredAnnotations()` returns only annotations directly placed on the element (class, method, field). `getAnnotations()` also includes **inherited** annotations — specifically those marked with `@Inherited` meta-annotation on a superclass. Note: `@Inherited` only works for class-level annotations, not method or field annotations. To find annotations on overridden methods in a class hierarchy, you must walk the hierarchy manually calling `getDeclaredAnnotations()` on each level.
+
+---
+
+**Q15: How would you build a test framework (like JUnit) using reflection?**
+
+Scan the class for methods annotated with `@Test` using `getDeclaredMethods()` filtered by `isAnnotationPresent(Test.class)`. For each test method: (1) Instantiate the class via `getDeclaredConstructor().newInstance()` (fresh instance per test); (2) Find and invoke methods annotated `@BeforeEach`; (3) Invoke the test method via `method.invoke(instance)` inside a try-catch; (4) Catch `InvocationTargetException` and check if `.getCause()` matches expected exceptions; (5) Invoke `@AfterEach` methods in a finally block. Record pass/fail. For `@BeforeAll`/`@AfterAll`, invoke once on a null instance (static methods).
+
+---
+
+## Advanced / Senior-Level Considerations
+
+**Performance Caching Strategy:**
+```
+Never look up Method/Field/Constructor objects in hot paths.
+Cache strategy: Map<Class<?>, Map<String, Method>> — keyed by class then method name.
+Better: MethodHandle cached in static final — JIT can inline it.
+Best for frameworks: generate bytecode (Byte Buddy, ASM) at startup — zero reflection at runtime.
+```
+
+**Byte Buddy — beyond reflection:**
+```java
+// Generate a subclass at runtime with intercepted methods
+// Used by Mockito, Hibernate, and modern Spring
+Class<?> dynamicClass = new ByteBuddy()
+    .subclass(UserService.class)
+    .method(ElementMatchers.named("findById"))
+    .intercept(InvocationHandlerAdapter.of(myHandler))
+    .make()
+    .load(UserService.class.getClassLoader())
+    .getLoaded();
+```
+
+**Java Agents — instrument at load time:**
+```
+java.lang.instrument.Instrumentation lets agents transform bytecode
+as classes are loaded via ClassFileTransformer. APM tools (New Relic,
+Datadog) inject timing, tracing, and logging without source changes.
+More powerful than reflection — works on final classes, avoids proxy limits.
+```
+
+**Integration with other systems:**
+- **Spring** — reflection for component scanning, proxy for AOP, ClassLoader hierarchy for application context isolation in multi-war deployments
+- **Hibernate** — reflection to map entities, bytecode enhancement for lazy loading, custom ClassLoader for entity proxies
+- **OSGi** — each bundle gets its own ClassLoader; visibility rules enforced by manifest; dynamic install/uninstall of bundles
+- **Microservices/Docker** — GraalVM native image eliminates most runtime reflection (requires reflection config JSON); AOT compilation replaces dynamic class loading
+- **Jackson** — uses reflection for field/method discovery, caches `BeanDeserializer` per class; `@JsonProperty` annotations read at `RUNTIME` retention
+
+---
+
+## Summary / Cheat Sheet
+
+```
+REFLECTION ENTRY POINTS
+  MyClass.class           → compile-time, no exception
+  obj.getClass()          → runtime type (may be subclass)
+  Class.forName(name)     → dynamic, ClassNotFoundException
+
+GET vs GET_DECLARED
+  getXxx()         → public only, includes INHERITED
+  getDeclaredXxx() → all visibility, THIS CLASS ONLY
+  Walk hierarchy to find private inherited members
+
+ACCESSIBILITY
+  field.setAccessible(true)  → bypass visibility
+  Java 9+: module opens required for cross-module access
+  InaccessibleObjectException if module boundary violated
+
+CLASS LOADING HIERARCHY
+  Bootstrap (null) → Platform → Application → Custom
+  Delegation: parent first, child only on parent miss
+  Same name + different loader = different type (ClassCastException!)
+  Context ClassLoader: Thread.currentThread().getContextClassLoader()
+
+ANNOTATION RETENTION
+  SOURCE  → compile time only (@Override)
+  CLASS   → in .class, not runtime (default)
+  RUNTIME → accessible via reflection (use for frameworks!)
+
+DYNAMIC PROXY RULES
+  JDK Proxy  → INTERFACE required, implements interface
+  CGLIB      → subclasses CONCRETE class, no interface needed
+  Cannot proxy: final class, final method (CGLIB), primitives
+  Self-invocation → bypasses proxy → AOP skipped!
+  InvocationTargetException → always unwrap with getCause()
+
+METHOD HANDLE vs REFLECT
+  Method.invoke()  → slow, boxing overhead, hard to JIT
+  MethodHandle     → fast, JIT-inlineable, cache in static final
+  invokeExact()    → zero overhead, types must match perfectly
+  VarHandle        → atomic field ops (CAS, getAndSet)
+
+PERFORMANCE RULES
+  Cache Field/Method/Constructor objects — lookup is expensive
+  Prefer MethodHandle over Method.invoke in hot paths
+  Prefer ByteBuddy/ASM bytecode gen over reflection in frameworks
+  GraalVM native: register classes needing reflection explicitly
+
+SENIOR GOTCHAS
+  - newInstance() (deprecated) swallows constructor exceptions
+  - Proxy annotations: check TARGET method, not proxy method
+  - ServiceLoader uses context classloader — set it correctly
+  - ClassLoader leaks in web apps: ThreadLocals, DriverManager, static refs
+  - @Inherited only works for class-level annotations
+  - CGLIB fails on final — Spring beans must be non-final!
+```
+
+# Java Networking — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+**Java Networking** encompasses the APIs and protocols used to communicate between processes over a network — from low-level byte-stream sockets to high-level HTTP clients. Java's networking stack spans `java.net`, `java.nio`, and the modern `java.net.http` (Java 11+) packages.
+
+**Why it matters:**
+- Every microservice, distributed system, and web application is built on networking primitives
+- Understanding the stack from TCP sockets to REST clients lets you diagnose latency, connection leaks, timeout cascades, and protocol mismatches
+- Senior engineers choose the right abstraction level — raw sockets for custom protocols, HTTP clients for REST, NIO for high-throughput servers
+- Most production bugs (timeouts, half-open connections, thread exhaustion) originate at this layer
+
+**Real-world applications:**
+- TCP sockets — database drivers (JDBC wire protocol), message brokers (Kafka, RabbitMQ), game servers
+- UDP — DNS resolution, DHCP, real-time telemetry, video streaming, QUIC transport
+- HTTP — REST APIs, webhooks, health checks, service-to-service communication
+- NIO — Netty, Undertow, high-connection-count servers (tens of thousands of concurrent clients)
+- WebSockets — live dashboards, chat, collaborative editing
+
+---
+
+## Core Concepts
+
+1. **OSI / TCP-IP Model** — Networking is layered; Java operates at Transport (TCP/UDP) and Application (HTTP) layers
+2. **Socket** — An endpoint for communication; identified by IP address + port number
+3. **Blocking vs Non-Blocking I/O** — Traditional sockets block the calling thread; NIO channels allow a single thread to manage many connections
+4. **Connection Lifecycle** — SYN → SYN-ACK → ACK (establish), FIN → ACK (close); understanding this prevents half-open connection bugs
+5. **Protocol** — A contract defining how bytes are structured; TCP is stream-based (no message boundaries), UDP is datagram-based (discrete packets)
+6. **Thread-per-connection vs Event Loop** — Classic Java uses one thread per connection; NIO/Netty use a small pool of threads with selectors
+7. **Backpressure** — When the sender produces faster than the receiver consumes; must be handled explicitly at the socket/application level
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. Sockets
+
+**Definition:** A `Socket` represents one end of a two-way communication link. `ServerSocket` listens for incoming connections; `Socket` represents an established connection (client or accepted server-side).
+
+**TCP Socket Lifecycle:**
+```
+Server: ServerSocket.bind() → listen() → accept() → read/write → close()
+Client:                        Socket()  → connect() → read/write → close()
+```
+
+**Basic TCP Server:**
+```java
+public class TcpEchoServer {
+    
+    public static void main(String[] args) throws IOException {
+        // Bind to port 8080, backlog queue = 50 pending connections
+        try (ServerSocket serverSocket = new ServerSocket(8080, 50)) {
+            
+            serverSocket.setSoTimeout(0);       // 0 = block forever on accept()
+            serverSocket.setReuseAddress(true); // reuse TIME_WAIT port immediately
+            
+            System.out.println("Listening on port 8080");
+            
+            while (true) {
+                Socket client = serverSocket.accept(); // blocks until connection
+                
+                // IMPORTANT: handle each client on its own thread
+                // (naive approach — see NIO for production)
+                Thread.ofVirtual().start(() -> handleClient(client)); // Java 21 virtual thread
+            }
+        }
+    }
+    
+    private static void handleClient(Socket client) {
+        // Try-with-resources ensures socket is closed even on exception
+        try (client;
+             BufferedReader in  = new BufferedReader(
+                 new InputStreamReader(client.getInputStream()));
+             PrintWriter    out = new PrintWriter(
+                 new BufferedWriter(new OutputStreamWriter(client.getOutputStream())),
+                 true)) { // autoflush=true
+            
+            // Configure socket options
+            client.setSoTimeout(30_000);    // 30s read timeout
+            client.setTcpNoDelay(true);     // disable Nagle — send small packets immediately
+            client.setKeepAlive(true);      // OS-level TCP keep-alive probes
+            
+            String line;
+            while ((line = in.readLine()) != null) { // blocks until data
+                System.out.println("Received: " + line);
+                out.println("ECHO: " + line); // write back to client
+            }
+        } catch (SocketTimeoutException e) {
+            System.out.println("Client timed out");
+        } catch (IOException e) {
+            System.out.println("Client error: " + e.getMessage());
+        }
+    }
+}
+```
+
+**TCP Client:**
+```java
+public class TcpClient {
+    
+    public static void main(String[] args) throws IOException {
+        // Socket(host, port) — connects immediately (or throws ConnectException)
+        try (Socket socket = new Socket()) {
+            
+            // Set connect timeout BEFORE connecting
+            socket.connect(new InetSocketAddress("localhost", 8080), 5_000); // 5s timeout
+            socket.setSoTimeout(10_000); // 10s read timeout
+            socket.setTcpNoDelay(true);
+            
+            BufferedReader in  = new BufferedReader(
+                new InputStreamReader(socket.getInputStream()));
+            PrintWriter    out = new PrintWriter(socket.getOutputStream(), true);
+            
+            out.println("Hello, server!");
+            String response = in.readLine();
+            System.out.println("Got: " + response); // ECHO: Hello, server!
+        }
+    }
+}
+```
+
+**Socket Options — Critical for production:**
+```java
+Socket s = new Socket();
+
+// SO_TIMEOUT — read timeout (throws SocketTimeoutException, does NOT close socket)
+s.setSoTimeout(30_000);
+
+// TCP_NODELAY — disables Nagle's algorithm (batching small packets)
+// Use for request/response protocols where latency matters
+// Don't use if sending many tiny writes (e.g., streaming)
+s.setTcpNoDelay(true);
+
+// SO_KEEPALIVE — OS sends probe packets on idle connections
+// Default interval is OS-dependent (often 2hrs!) — configure at OS level
+// Use application-level heartbeats for fine-grained control
+s.setKeepAlive(true);
+
+// SO_LINGER — control behavior on close()
+// linger=0: RST sent immediately (abortive close), no TIME_WAIT
+// linger=n: block close() up to n seconds, trying to flush
+// linger disabled: OS handles graceful FIN (recommended default)
+s.setSoLinger(false, 0); // disabled — OS does graceful close
+
+// SO_RCVBUF / SO_SNDBUF — socket buffer sizes
+// Larger buffers = better throughput on high-latency links (increase bandwidth-delay product)
+// Must set BEFORE connect() or bind()
+s.setReceiveBufferSize(64 * 1024); // 64KB
+s.setSendBufferSize(64 * 1024);
+
+// SO_REUSEADDR — allow binding to port in TIME_WAIT (essential for server restarts)
+ServerSocket ss = new ServerSocket();
+ss.setReuseAddress(true);
+ss.bind(new InetSocketAddress(8080));
+```
+
+**NIO Non-Blocking Server (Selector-based):**
+```java
+public class NioEchoServer {
+    
+    public static void main(String[] args) throws IOException {
+        Selector selector = Selector.open();
+        
+        ServerSocketChannel serverChannel = ServerSocketChannel.open();
+        serverChannel.configureBlocking(false); // non-blocking!
+        serverChannel.bind(new InetSocketAddress(8080));
+        serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+        
+        ByteBuffer buffer = ByteBuffer.allocateDirect(4096); // direct buffer — faster I/O
+        
+        while (true) {
+            selector.select(); // blocks until at least one channel is ready
+            
+            Iterator<SelectionKey> keys = selector.selectedKeys().iterator();
+            while (keys.hasNext()) {
+                SelectionKey key = keys.next();
+                keys.remove(); // MUST remove to avoid reprocessing
+                
+                if (!key.isValid()) continue;
+                
+                if (key.isAcceptable()) {
+                    // New connection
+                    SocketChannel client = serverChannel.accept();
+                    client.configureBlocking(false);
+                    client.register(selector, SelectionKey.OP_READ);
+                    System.out.println("Accepted: " + client.getRemoteAddress());
+                    
+                } else if (key.isReadable()) {
+                    // Data available to read
+                    SocketChannel client = (SocketChannel) key.channel();
+                    buffer.clear();
+                    int bytesRead = client.read(buffer);
+                    
+                    if (bytesRead == -1) {
+                        // Client closed connection
+                        key.cancel();
+                        client.close();
+                        continue;
+                    }
+                    
+                    // Echo back
+                    buffer.flip(); // switch from write to read mode
+                    client.write(buffer);
+                }
+            }
+        }
+    }
+}
+```
+
+**Common Pitfalls:**
+- Not setting `SO_TIMEOUT` — reads block indefinitely, threads hang forever on dead connections
+- Forgetting `flush()` — data sits in `BufferedWriter` buffer, never sent to client
+- Not closing socket in `finally`/try-with-resources — file descriptor leak
+- Creating `new Socket(host, port)` without connect timeout — uses OS default (minutes)
+- `setSoTimeout` affects reads only, NOT the initial `connect()` — set connect timeout separately via `socket.connect(addr, timeout)`
+
+---
+
+### 2. TCP vs UDP
+
+**Protocol Comparison:**
+
+```
+┌─────────────────────┬──────────────────────────┬──────────────────────────┐
+│ Property            │ TCP                      │ UDP                      │
+├─────────────────────┼──────────────────────────┼──────────────────────────┤
+│ Connection          │ Connection-oriented       │ Connectionless           │
+│ Reliability         │ Guaranteed delivery       │ Best-effort              │
+│ Ordering            │ In-order delivery         │ No ordering guarantee    │
+│ Error checking      │ Yes (retransmit)          │ Checksum only            │
+│ Flow control        │ Yes (sliding window)      │ No                       │
+│ Congestion control  │ Yes (slow start, AIMD)   │ No                       │
+│ Header size         │ 20 bytes min              │ 8 bytes                  │
+│ Speed               │ Slower (ack overhead)     │ Faster                   │
+│ Use cases           │ HTTP, SMTP, JDBC, SSH     │ DNS, video, gaming, DHCP │
+└─────────────────────┴──────────────────────────┴──────────────────────────┘
+```
+
+**UDP DatagramSocket:**
+```java
+// UDP Server
+public class UdpEchoServer {
+    public static void main(String[] args) throws IOException {
+        try (DatagramSocket socket = new DatagramSocket(9090)) {
+            byte[] buffer = new byte[1024];
+            System.out.println("UDP server listening on 9090");
+            
+            while (true) {
+                // Receive datagram — packet contains data + sender address
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                socket.receive(packet); // blocks until datagram arrives
+                
+                String message = new String(
+                    packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8
+                );
+                System.out.println("Got: " + message + " from " + packet.getSocketAddress());
+                
+                // Echo back to sender
+                byte[] response = ("ECHO: " + message).getBytes(StandardCharsets.UTF_8);
+                DatagramPacket reply = new DatagramPacket(
+                    response, response.length,
+                    packet.getAddress(), packet.getPort()
+                );
+                socket.send(reply);
+            }
+        }
+    }
+}
+
+// UDP Client
+public class UdpClient {
+    public static void main(String[] args) throws IOException {
+        try (DatagramSocket socket = new DatagramSocket()) {
+            socket.setSoTimeout(5_000); // 5s wait for response
+            
+            InetAddress serverAddr = InetAddress.getByName("localhost");
+            byte[] data = "Hello UDP!".getBytes(StandardCharsets.UTF_8);
+            
+            // Send packet
+            DatagramPacket packet = new DatagramPacket(data, data.length, serverAddr, 9090);
+            socket.send(packet);
+            
+            // Receive response
+            byte[] buffer = new byte[1024];
+            DatagramPacket response = new DatagramPacket(buffer, buffer.length);
+            socket.receive(response); // throws SocketTimeoutException if no reply
+            
+            System.out.println("Response: " + new String(
+                response.getData(), 0, response.getLength(), StandardCharsets.UTF_8
+            ));
+        }
+    }
+}
+```
+
+**UDP Multicast:**
+```java
+// Send to a group — all members receive (used for service discovery, mDNS)
+InetAddress group = InetAddress.getByName("239.0.0.1"); // multicast range: 224.x - 239.x
+
+// Sender
+try (MulticastSocket sender = new MulticastSocket()) {
+    byte[] data = "Service announcement".getBytes();
+    DatagramPacket packet = new DatagramPacket(data, data.length, group, 5555);
+    sender.send(packet);
+}
+
+// Receiver
+try (MulticastSocket receiver = new MulticastSocket(5555)) {
+    NetworkInterface ni = NetworkInterface.getByName("eth0");
+    receiver.joinGroup(new InetSocketAddress(group, 5555), ni);
+    
+    byte[] buffer = new byte[1024];
+    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+    receiver.receive(packet); // blocks until multicast arrives
+    
+    receiver.leaveGroup(new InetSocketAddress(group, 5555), ni);
+}
+```
+
+**Building reliability on top of UDP (conceptual):**
+```java
+// Simple stop-and-wait ARQ over UDP
+public class ReliableUdpChannel {
+    private final DatagramSocket socket;
+    private int sequenceNumber = 0;
+    
+    public void sendReliably(byte[] data, InetSocketAddress dest) throws IOException {
+        int retries = 0;
+        int maxRetries = 5;
+        long timeoutMs = 1000;
+        
+        // Prepend sequence number
+        byte[] packet = prependSeqNum(sequenceNumber, data);
+        
+        while (retries < maxRetries) {
+            socket.send(new DatagramPacket(packet, packet.length, dest));
+            
+            // Wait for ACK
+            try {
+                socket.setSoTimeout((int) timeoutMs);
+                byte[] ackBuf = new byte[4];
+                DatagramPacket ack = new DatagramPacket(ackBuf, ackBuf.length);
+                socket.receive(ack);
+                
+                int ackedSeq = ByteBuffer.wrap(ackBuf).getInt();
+                if (ackedSeq == sequenceNumber) {
+                    sequenceNumber++; // success
+                    return;
+                }
+            } catch (SocketTimeoutException e) {
+                retries++;
+                timeoutMs *= 2; // exponential backoff
+                System.out.println("Timeout, retry " + retries);
+            }
+        }
+        throw new IOException("Delivery failed after " + maxRetries + " retries");
+    }
+}
+```
+
+**Common Pitfalls:**
+- Assuming UDP packets arrive in order (they don't — implement sequence numbers if needed)
+- UDP payload limited to ~65507 bytes (65535 - headers); fragment at the application layer for larger messages
+- Not handling lost UDP packets for critical data
+- Using UDP for large data transfers without implementing flow control — receiver overwhelm
+
+---
+
+### 3. HTTP Basics
+
+**HTTP Request/Response Structure:**
+```
+Request:
+  METHOD /path?query HTTP/1.1\r\n
+  Host: example.com\r\n
+  Content-Type: application/json\r\n
+  Content-Length: 42\r\n
+  \r\n
+  {"body": "data"}
+
+Response:
+  HTTP/1.1 200 OK\r\n
+  Content-Type: application/json\r\n
+  Content-Length: 28\r\n
+  Connection: keep-alive\r\n
+  \r\n
+  {"status": "ok", "id": 123}
+```
+
+**HTTP Versions:**
+```
+HTTP/1.0  — new TCP connection per request (no keep-alive by default)
+HTTP/1.1  — persistent connections (keep-alive), pipelining (rarely used), chunked transfer
+HTTP/2    — multiplexing (multiple requests over one TCP connection), header compression (HPACK),
+            server push, binary framing layer
+HTTP/3    — built on QUIC (UDP-based), eliminates TCP head-of-line blocking, faster handshake
+```
+
+**Status Codes — what a senior must know deeply:**
+```
+1xx Informational   100 Continue, 101 Switching Protocols
+2xx Success         200 OK, 201 Created, 202 Accepted, 204 No Content, 206 Partial Content
+3xx Redirection     301 Moved Permanently, 302 Found, 304 Not Modified, 307/308 Temporary/Permanent
+4xx Client Error    400 Bad Request, 401 Unauthorized (unauthenticated!), 403 Forbidden,
+                    404 Not Found, 405 Method Not Allowed, 409 Conflict, 410 Gone,
+                    422 Unprocessable Entity, 429 Too Many Requests
+5xx Server Error    500 Internal Server Error, 502 Bad Gateway, 503 Service Unavailable,
+                    504 Gateway Timeout
+```
+
+**Keep-Alive and Connection Reuse:**
+```
+HTTP/1.1 default: Connection: keep-alive
+Server declares how long to keep idle connection open
+Client must not send request on connection after server sends Connection: close
+Failure to respect this → "connection reset" errors under load
+```
+
+**Raw HTTP over Socket (illustrative):**
+```java
+// Shows what HTTP client libraries do under the hood
+public class RawHttpClient {
+    public static String get(String host, int port, String path) throws IOException {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 5_000);
+            socket.setSoTimeout(10_000);
+            
+            PrintWriter out = new PrintWriter(
+                new BufferedWriter(new OutputStreamWriter(socket.getOutputStream())),
+                false
+            );
+            BufferedReader in = new BufferedReader(
+                new InputStreamReader(socket.getInputStream())
+            );
+            
+            // Write HTTP/1.1 request
+            out.print("GET " + path + " HTTP/1.1\r\n");
+            out.print("Host: " + host + "\r\n");
+            out.print("Connection: close\r\n"); // close after response
+            out.print("Accept: application/json\r\n");
+            out.print("\r\n"); // blank line = end of headers
+            out.flush(); // CRITICAL
+            
+            // Read status line
+            String statusLine = in.readLine();
+            System.out.println("Status: " + statusLine); // HTTP/1.1 200 OK
+            
+            // Read headers
+            Map<String, String> headers = new LinkedHashMap<>();
+            String headerLine;
+            while (!(headerLine = in.readLine()).isEmpty()) {
+                int colon = headerLine.indexOf(':');
+                headers.put(
+                    headerLine.substring(0, colon).trim().toLowerCase(),
+                    headerLine.substring(colon + 1).trim()
+                );
+            }
+            
+            // Read body
+            StringBuilder body = new StringBuilder();
+            String line;
+            while ((line = in.readLine()) != null) {
+                body.append(line).append('\n');
+            }
+            
+            return body.toString();
+        }
+    }
+}
+```
+
+**Common Pitfalls:**
+- Conflating 401 (not authenticated) with 403 (authenticated but not authorized)
+- Not following redirects — manual implementation must cap redirect depth (loop prevention)
+- Ignoring `Content-Length` — reading past end of response or not reading enough
+- Not handling chunked transfer encoding when `Content-Length` is absent
+
+---
+
+### 4. URL Connections
+
+**`java.net.URL` and `HttpURLConnection` — legacy but widely encountered:**
+
+```java
+// HttpURLConnection — Java's built-in HTTP client pre-Java 11
+public class HttpUrlConnectionClient {
+    
+    public static String get(String urlString) throws IOException {
+        URL url = new URL(urlString);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        
+        try {
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(5_000);    // connection timeout
+            conn.setReadTimeout(10_000);      // read timeout
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("User-Agent", "MyApp/1.0");
+            conn.setInstanceFollowRedirects(true); // follow 3xx automatically
+            
+            int responseCode = conn.getResponseCode(); // triggers connection + request
+            
+            if (responseCode >= 200 && responseCode < 300) {
+                return readStream(conn.getInputStream());
+            } else {
+                // IMPORTANT: read error stream or connection won't be returned to pool
+                String error = readStream(conn.getErrorStream());
+                throw new IOException("HTTP " + responseCode + ": " + error);
+            }
+        } finally {
+            conn.disconnect(); // releases connection (returns to keep-alive pool if applicable)
+        }
+    }
+    
+    public static String post(String urlString, String json) throws IOException {
+        URL url = new URL(urlString);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        
+        try {
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);            // enables writing body
+            conn.setDoInput(true);             // enables reading response (default true)
+            conn.setConnectTimeout(5_000);
+            conn.setReadTimeout(10_000);
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("Accept", "application/json");
+            
+            byte[] body = json.getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(body.length); // don't buffer entire body
+            // OR: conn.setChunkedStreamingMode(4096); // for streaming/unknown length
+            
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body);
+                os.flush();
+            }
+            
+            int responseCode = conn.getResponseCode();
+            if (responseCode >= 200 && responseCode < 300) {
+                return readStream(conn.getInputStream());
+            } else {
+                throw new IOException("HTTP " + responseCode + ": " +
+                                      readStream(conn.getErrorStream()));
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+    
+    private static String readStream(InputStream is) throws IOException {
+        if (is == null) return "";
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(is, StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) sb.append(line).append('\n');
+            return sb.toString().trim();
+        }
+    }
+}
+```
+
+**HTTPS and SSL/TLS:**
+```java
+// HTTPS works transparently via HttpURLConnection — URL protocol determines it
+URL url = new URL("https://api.example.com/data");
+HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
+
+// Custom TrustManager — for self-signed certs (TEST ONLY — never in production!)
+TrustManager[] trustAll = { new X509TrustManager() {
+    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+    public void checkClientTrusted(X509Certificate[] c, String a) {}
+    public void checkServerTrusted(X509Certificate[] c, String a) {}
+}};
+
+SSLContext sc = SSLContext.getInstance("TLS");
+sc.init(null, trustAll, new SecureRandom());
+conn.setSSLSocketFactory(sc.getSocketFactory());
+conn.setHostnameVerifier((hostname, session) -> true); // INSECURE — test only!
+
+// Production: load custom truststore
+KeyStore trustStore = KeyStore.getInstance("JKS");
+trustStore.load(new FileInputStream("truststore.jks"), "password".toCharArray());
+TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+tmf.init(trustStore);
+SSLContext sslContext = SSLContext.getInstance("TLS");
+sslContext.init(null, tmf.getTrustManagers(), null);
+conn.setSSLSocketFactory(sslContext.getSocketFactory());
+```
+
+**Proxy Configuration:**
+```java
+// Explicit proxy
+Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress("proxy.corp.com", 8080));
+HttpURLConnection conn = (HttpURLConnection) url.openConnection(proxy);
+
+// SOCKS proxy
+Proxy socks = new Proxy(Proxy.Type.SOCKS, new InetSocketAddress("socks.corp.com", 1080));
+
+// System-wide proxy via JVM properties
+System.setProperty("http.proxyHost",  "proxy.corp.com");
+System.setProperty("http.proxyPort",  "8080");
+System.setProperty("https.proxyHost", "proxy.corp.com");
+System.setProperty("https.proxyPort", "8080");
+System.setProperty("http.nonProxyHosts", "localhost|127.*|internal.*");
+```
+
+**Common Pitfalls:**
+- Not reading `getErrorStream()` on non-2xx responses — connection not returned to pool, leaks
+- Using `setFixedLengthStreamingMode` without knowing content length — use `setChunkedStreamingMode` for unknown sizes
+- Calling `disconnect()` eagerly — kills keep-alive connection pooling; call only when truly done with the host
+- Thread safety — `HttpURLConnection` is NOT thread-safe; one instance per request
+
+---
+
+### 5. REST Clients
+
+#### Java 11+ HttpClient (Modern Standard)
+
+```java
+// Create client — reuse across requests (manages connection pool, thread pool)
+HttpClient client = HttpClient.newBuilder()
+    .version(HttpClient.Version.HTTP_2)            // prefer HTTP/2, fallback to HTTP/1.1
+    .followRedirects(HttpClient.Redirect.NORMAL)   // follow non-HTTPS→HTTP redirects
+    .connectTimeout(Duration.ofSeconds(5))
+    .executor(Executors.newFixedThreadPool(10))    // custom thread pool for async ops
+    .authenticator(new Authenticator() {
+        @Override protected PasswordAuthentication getPasswordAuthentication() {
+            return new PasswordAuthentication("user", "pass".toCharArray());
+        }
+    })
+    .proxy(ProxySelector.of(new InetSocketAddress("proxy.corp.com", 8080)))
+    .sslContext(customSslContext)
+    .build();
+```
+
+**Synchronous Requests:**
+```java
+// GET
+HttpRequest getRequest = HttpRequest.newBuilder()
+    .uri(URI.create("https://api.example.com/users/1"))
+    .timeout(Duration.ofSeconds(10))
+    .header("Accept", "application/json")
+    .header("Authorization", "Bearer " + token)
+    .GET()
+    .build();
+
+HttpResponse<String> response = client.send(getRequest, HttpResponse.BodyHandlers.ofString());
+
+System.out.println(response.statusCode()); // 200
+System.out.println(response.body());       // {"id":1,"name":"Alice"}
+System.out.println(response.headers().firstValue("Content-Type").orElse(""));
+
+// POST with JSON body
+String jsonBody = """
+    {
+        "name": "Alice",
+        "email": "alice@example.com"
+    }
+    """;
+
+HttpRequest postRequest = HttpRequest.newBuilder()
+    .uri(URI.create("https://api.example.com/users"))
+    .timeout(Duration.ofSeconds(10))
+    .header("Content-Type", "application/json")
+    .header("Accept", "application/json")
+    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+    .build();
+
+HttpResponse<String> postResponse = client.send(postRequest, HttpResponse.BodyHandlers.ofString());
+// 201 Created
+
+// PUT
+HttpRequest putRequest = HttpRequest.newBuilder()
+    .uri(URI.create("https://api.example.com/users/1"))
+    .header("Content-Type", "application/json")
+    .PUT(HttpRequest.BodyPublishers.ofString(jsonBody))
+    .build();
+
+// DELETE
+HttpRequest deleteRequest = HttpRequest.newBuilder()
+    .uri(URI.create("https://api.example.com/users/1"))
+    .DELETE()
+    .build();
+
+// PATCH — no built-in method, use method()
+HttpRequest patchRequest = HttpRequest.newBuilder()
+    .uri(URI.create("https://api.example.com/users/1"))
+    .header("Content-Type", "application/json-patch+json")
+    .method("PATCH", HttpRequest.BodyPublishers.ofString("[{\"op\":\"replace\",\"path\":\"/name\",\"value\":\"Bob\"}]"))
+    .build();
+```
+
+**Asynchronous Requests:**
+```java
+// sendAsync — returns CompletableFuture, non-blocking
+CompletableFuture<HttpResponse<String>> future = client.sendAsync(
+    getRequest, HttpResponse.BodyHandlers.ofString()
+);
+
+// Transform response asynchronously
+CompletableFuture<User> userFuture = future
+    .thenApply(response -> {
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("HTTP " + response.statusCode());
+        }
+        return response.body();
+    })
+    .thenApply(json -> parseUser(json)) // deserialize
+    .exceptionally(ex -> {
+        log.error("Request failed", ex);
+        return null;
+    });
+
+// Wait for result (don't call join() on reactive pipelines — defeats the purpose)
+User user = userFuture.join(); // blocks calling thread
+
+// Fan-out: fire multiple requests concurrently
+List<URI> uris = List.of(
+    URI.create("https://api.example.com/users/1"),
+    URI.create("https://api.example.com/users/2"),
+    URI.create("https://api.example.com/users/3")
+);
+
+List<CompletableFuture<User>> futures = uris.stream()
+    .map(uri -> HttpRequest.newBuilder().uri(uri).GET().build())
+    .map(req -> client.sendAsync(req, HttpResponse.BodyHandlers.ofString())
+                      .thenApply(r -> parseUser(r.body())))
+    .collect(Collectors.toList());
+
+// Wait for all
+CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+List<User> users = futures.stream()
+    .map(CompletableFuture::join)
+    .collect(Collectors.toList());
+```
+
+**Body Handlers and Publishers:**
+```java
+// BodyHandlers — how to process the response body
+HttpResponse.BodyHandlers.ofString()               // String (UTF-8 default)
+HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+HttpResponse.BodyHandlers.ofByteArray()            // byte[]
+HttpResponse.BodyHandlers.ofFile(Path.of("out.json")) // write directly to file
+HttpResponse.BodyHandlers.ofInputStream()          // streaming — you handle the stream
+HttpResponse.BodyHandlers.discarding()             // ignore body (e.g., DELETE)
+HttpResponse.BodyHandlers.ofLines()                // Stream<String> line by line
+
+// Streaming a large response without loading into memory
+HttpResponse<InputStream> streamResponse = client.send(
+    getRequest, HttpResponse.BodyHandlers.ofInputStream()
+);
+try (InputStream is = streamResponse.body()) {
+    // process incrementally — never loads full body into heap
+    processLargeResponse(is);
+}
+
+// BodyPublishers — how to provide the request body
+HttpRequest.BodyPublishers.ofString(json)
+HttpRequest.BodyPublishers.ofByteArray(bytes)
+HttpRequest.BodyPublishers.ofFile(Path.of("upload.json"))
+HttpRequest.BodyPublishers.ofInputStream(() -> new FileInputStream("data.bin"))
+HttpRequest.BodyPublishers.noBody()                 // GET, DELETE
+```
+
+**Retry Logic with Exponential Backoff:**
+```java
+public class RetryingHttpClient {
+    
+    private final HttpClient client;
+    private final int maxRetries;
+    
+    public HttpResponse<String> sendWithRetry(HttpRequest request) throws Exception {
+        int attempt = 0;
+        long delayMs = 500;
+        
+        while (true) {
+            try {
+                HttpResponse<String> response = client.send(
+                    request, HttpResponse.BodyHandlers.ofString()
+                );
+                
+                if (response.statusCode() == 429) { // Too Many Requests
+                    String retryAfter = response.headers()
+                        .firstValue("Retry-After").orElse("1");
+                    long wait = Long.parseLong(retryAfter) * 1000;
+                    Thread.sleep(wait);
+                    continue;
+                }
+                
+                if (response.statusCode() >= 500 && attempt < maxRetries) {
+                    attempt++;
+                    Thread.sleep(delayMs + ThreadLocalRandom.current().nextLong(100));
+                    delayMs = Math.min(delayMs * 2, 30_000); // cap at 30s
+                    continue;
+                }
+                
+                return response;
+                
+            } catch (HttpTimeoutException | ConnectException e) {
+                if (attempt >= maxRetries) throw e;
+                attempt++;
+                Thread.sleep(delayMs);
+                delayMs = Math.min(delayMs * 2, 30_000);
+            }
+        }
+    }
+}
+```
+
+**Third-Party REST Clients:**
+
+```java
+// ── OkHttp ─────────────────────────────────────────────────────────
+OkHttpClient okClient = new OkHttpClient.Builder()
+    .connectTimeout(5, TimeUnit.SECONDS)
+    .readTimeout(10, TimeUnit.SECONDS)
+    .writeTimeout(10, TimeUnit.SECONDS)
+    .connectionPool(new ConnectionPool(10, 5, TimeUnit.MINUTES)) // pool config
+    .addInterceptor(chain -> {                // request interceptor
+        Request req = chain.request().newBuilder()
+            .header("Authorization", "Bearer " + getToken())
+            .build();
+        return chain.proceed(req);
+    })
+    .addInterceptor(new HttpLoggingInterceptor()) // logging
+    .retryOnConnectionFailure(true)
+    .build();
+
+// GET
+Request request = new Request.Builder()
+    .url("https://api.example.com/users/1")
+    .get()
+    .build();
+
+try (Response response = okClient.newCall(request).execute()) {
+    if (!response.isSuccessful()) throw new IOException("HTTP " + response.code());
+    String body = response.body().string(); // MUST close response — use try-with-resources
+}
+
+// POST
+RequestBody body = RequestBody.create(json, MediaType.get("application/json"));
+Request postReq = new Request.Builder()
+    .url("https://api.example.com/users")
+    .post(body)
+    .build();
+
+// Async
+okClient.newCall(request).enqueue(new Callback() {
+    @Override public void onFailure(Call call, IOException e) { /* handle */ }
+    @Override public void onResponse(Call call, Response response) throws IOException {
+        try (response) { String body = response.body().string(); }
+    }
+});
+
+// ── Apache HttpClient 5 ─────────────────────────────────────────────
+CloseableHttpClient apacheClient = HttpClients.custom()
+    .setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
+        .setMaxConnTotal(100)
+        .setMaxConnPerRoute(20)
+        .build())
+    .setDefaultRequestConfig(RequestConfig.custom()
+        .setConnectionRequestTimeout(Timeout.ofSeconds(5))
+        .setResponseTimeout(Timeout.ofSeconds(10))
+        .build())
+    .setRetryStrategy(new DefaultHttpRequestRetryStrategy(3, TimeValue.ofSeconds(1)))
+    .build();
+
+try (CloseableHttpResponse response = apacheClient.execute(
+        new HttpGet("https://api.example.com/data"))) {
+    int statusCode = response.getCode();
+    String responseBody = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
+}
+
+// ── Spring WebClient (Reactive) ─────────────────────────────────────
+WebClient webClient = WebClient.builder()
+    .baseUrl("https://api.example.com")
+    .defaultHeader("Accept", "application/json")
+    .defaultHeader("Authorization", "Bearer " + token)
+    .filter(ExchangeFilterFunction.ofRequestProcessor(req -> {
+        log.info("Request: {} {}", req.method(), req.url());
+        return Mono.just(req);
+    }))
+    .codecs(c -> c.defaultCodecs().maxInMemorySize(10 * 1024 * 1024)) // 10MB
+    .build();
+
+// Reactive GET
+Mono<User> userMono = webClient.get()
+    .uri("/users/{id}", 1)
+    .retrieve()
+    .onStatus(HttpStatusCode::is4xxClientError, resp ->
+        resp.bodyToMono(ErrorResponse.class)
+            .flatMap(err -> Mono.error(new ClientException(err.message()))))
+    .onStatus(HttpStatusCode::is5xxServerError, resp ->
+        Mono.error(new ServerException("Server error: " + resp.statusCode())))
+    .bodyToMono(User.class); // non-blocking — nothing executed yet
+
+// Execute
+User user = userMono.block(); // sync (avoid in reactive pipelines)
+userMono.subscribe(u -> System.out.println(u)); // async
+
+// Reactive POST
+Mono<User> created = webClient.post()
+    .uri("/users")
+    .contentType(MediaType.APPLICATION_JSON)
+    .bodyValue(new CreateUserRequest("Alice", "alice@example.com"))
+    .retrieve()
+    .bodyToMono(User.class);
+```
+
+**Connection Pool Sizing — production tuning:**
+```
+Pool size formula: threads × (avg_response_time / avg_request_time)
+Too small → queue buildup → timeouts
+Too large → memory pressure, connection overhead at server
+
+For microservices: size per route not just globally
+Idle eviction: close connections idle > server's keep-alive timeout
+   (nginx default: 75s, so evict client-side at ~60s)
+```
+
+**Common Pitfalls:**
+- Creating a new `HttpClient` per request — loses connection pooling
+- Not closing `OkHttp` `Response` body — file descriptor and memory leak
+- Forgetting to configure BOTH connect timeout AND read/request timeout — they are independent
+- Blocking on `WebClient` in a reactive pipeline (`block()` inside flatMap) — deadlock
+- Not handling `429 Too Many Requests` with `Retry-After` header — hammering the server
+
+---
+
+## Interview Questions
+
+**Q1: What is the difference between a Socket and a ServerSocket?**
+
+`ServerSocket` is a passive endpoint — it binds to a port and listens for incoming connection requests, blocking on `accept()` until a client connects. It does not exchange data. `ServerSocket.accept()` returns a `Socket` representing the specific accepted connection. `Socket` is an active endpoint representing one established TCP connection, used by both the client (who initiated) and the server (returned from `accept()`). For each client connection, the server has one `Socket` but the `ServerSocket` remains open accepting more.
+
+---
+
+**Q2: What happens if you don't set `SO_TIMEOUT` on a socket?**
+
+The socket read operations block **indefinitely** — they never return unless data arrives or the connection is closed. In a thread-per-connection server, if a client connects and then stops sending data (network partition, crash without FIN), the server thread hangs forever, leaking the thread and its socket file descriptor. This is the classic cause of thread exhaustion under load. Always set both `setSoTimeout()` for reads and specify a connect timeout via `socket.connect(addr, timeout)` — these are independent settings.
+
+---
+
+**Q3: Explain the TCP three-way handshake and why it matters for performance.**
+
+Client sends SYN → Server responds SYN-ACK → Client sends ACK; at this point the connection is established and the first data can be sent. This takes one full round-trip before any application data flows. For short-lived connections (HTTP/1.0 style), this adds at least one RTT of latency per request. HTTP keep-alive and HTTP/2 connection reuse amortize this cost. TLS adds 1-2 additional round trips (TLS 1.2 = 2 RTT, TLS 1.3 = 1 RTT, TLS 1.3 0-RTT resumption = zero). In a distributed system, creating new connections on every request under load causes latency spikes — connection pooling eliminates this.
+
+---
+
+**Q4: When would you choose UDP over TCP?**
+
+Choose UDP when: (1) low latency matters more than reliability — video/audio streaming where a dropped frame is preferable to delay; (2) you have a simple request/response that fits in one datagram — DNS (most queries), small telemetry messages; (3) you want broadcast or multicast — service discovery, mDNS; (4) you're building your own reliability protocol tuned to your use case (QUIC does this). Don't use UDP when data integrity or ordering is required and you'd have to re-implement TCP's features — you'll end up with a worse TCP.
+
+---
+
+**Q5: What is the difference between `HTTP/1.1` keep-alive, `HTTP/2` multiplexing, and `HTTP/3`?**
+
+HTTP/1.1 keep-alive reuses a TCP connection for multiple sequential requests but still has head-of-line blocking — request N must complete before N+1 starts on the same connection. HTTP/2 multiplexing sends multiple requests in parallel over a single TCP connection using independently framed streams, eliminating HTTP-level head-of-line blocking — but TCP-level head-of-line blocking remains (a dropped TCP packet stalls all streams). HTTP/3 runs over QUIC (UDP-based) where streams are independent at the transport level too — a lost packet only affects its stream, not others. HTTP/3 also achieves faster handshakes (0-RTT connection resumption).
+
+---
+
+**Q6: How does `HttpClient` (Java 11+) handle connection pooling?**
+
+`HttpClient` maintains an internal connection pool per `HttpClient` instance. Connections are keyed by host, port, and protocol version. It automatically reuses keep-alive HTTP/1.1 connections and maintains persistent HTTP/2 connections (which multiplex all requests to the same host). This is why you must create one `HttpClient` instance per application (or per logical "client configuration") and share it — a new `HttpClient` per request forfeits all pooling benefits and creates one connection per request, exactly like HTTP/1.0.
+
+---
+
+**Q7: What is the self-invocation problem equivalent in networking — and what is it?**
+
+The networking equivalent of AOP self-invocation is the **proxy bypass problem**: when a service calls itself via `localhost` or its internal IP rather than through its load balancer or service mesh proxy, it bypasses circuit breakers, rate limiters, retries, and observability instrumentation that live in the proxy layer. Always route internal calls through the same service mesh/proxy path (sidecar patterns like Envoy) or implement resilience in the client directly.
+
+---
+
+**Q8: How do you handle connection leaks in HTTP clients?**
+
+Connection leaks occur when responses are not fully read or properly closed. For `HttpURLConnection`: always read `getErrorStream()` on non-2xx responses; always call `disconnect()` in `finally`. For `OkHttp`: always close `Response` in try-with-resources. For `HttpClient` (Java 11): if using `ofInputStream()` handler, always close the stream. Use connection pool metrics (active, idle, pending counts) to detect leaks in production. Set `connectionPool` max-idle-time to prevent stale connections: servers close idle connections (nginx at 75s), clients must evict before that or receive RST.
+
+---
+
+**Q9: What is the difference between `connectTimeout` and `readTimeout`?**
+
+`connectTimeout` limits how long the TCP handshake may take — how long to wait for the server to respond to SYN. If the server is unreachable, down, or the network is dropping packets, this timeout triggers. `readTimeout` (or request timeout in Java 11 `HttpClient`) limits how long to wait for data AFTER the connection is established — covers the time from sending the request to receiving the first byte of response (plus time between bytes for slow bodies). Both must be set independently. A missing `readTimeout` means a slow server can hold your thread/coroutine indefinitely even after successfully connecting.
+
+---
+
+**Q10: How does `NIO` Selector-based networking differ from thread-per-connection?**
+
+Thread-per-connection: each connected client gets a dedicated thread that blocks on I/O. Simple to code but doesn't scale past ~10,000 concurrent connections (JVM thread overhead ~1MB stack each). NIO selector: a single thread (or small pool) monitors many channels simultaneously via `Selector.select()` — an OS-level `epoll`/`kqueue` call. The thread only activates when a channel has data ready. This is the C10K problem solution — Netty, Undertow, Vert.x are all built on this model. Java 21 virtual threads close this gap: thread-per-connection becomes viable again because virtual threads are cheap (~few KB) and block on virtual-thread-aware I/O without blocking OS threads.
+
+---
+
+**Q11: Explain the `TIME_WAIT` state and `SO_REUSEADDR`.**
+
+After the active closer sends the final ACK in TCP teardown, the connection enters `TIME_WAIT` for `2×MSL` (Maximum Segment Lifetime, typically 60s–4min). This ensures the remote end receives the final ACK and prevents old packets from a closed connection being mistaken for a new one. During `TIME_WAIT`, the local port cannot be reused. For servers that restart quickly (e.g., development, rolling deploy), the same port can't rebind immediately, causing `Address already in use`. `SO_REUSEADDR` tells the OS to allow binding to a port in `TIME_WAIT` state — safe because the kernel still prevents actual packet confusion. Always set `setReuseAddress(true)` before `bind()` on server sockets.
+
+---
+
+**Q12: How would you implement circuit breaker pattern in a REST client?**
+
+A circuit breaker wraps HTTP calls with three states: Closed (calls pass through), Open (calls fail fast without making network calls), Half-Open (probe calls to test recovery). Track failure rate over a sliding window (failures / total calls in last N seconds). When rate exceeds threshold (e.g., 50% failures in 10s), trip to Open. After a cool-down period, transition to Half-Open and allow one probe. Success → Closed, failure → Open again. In Java: use Resilience4j's `CircuitBreaker`, wrap `HttpClient.send()` calls with `Decorators.ofSupplier(circuitBreaker, callable)`. Record `CallNotPermittedException` as circuit-open metrics in your monitoring.
+
+---
+
+**Q13: What is the difference between `WebClient` and `RestTemplate`?**
+
+`RestTemplate` is Spring's synchronous, blocking HTTP client — each call occupies a thread for the duration. It's straightforward but doesn't scale well under high concurrency in non-blocking runtimes. `WebClient` is Spring's reactive, non-blocking HTTP client built on Project Reactor and Netty — it returns `Mono<T>` or `Flux<T>` and doesn't hold threads while waiting for I/O. `RestTemplate` is in maintenance mode (no new features). For new code in Spring Boot 3+, prefer `WebClient` or the new `RestClient` (Spring 6.1+, a synchronous but modern API). Use `WebClient` when building reactive pipelines; use `RestClient` for simple synchronous service-to-service calls.
+
+---
+
+**Q14: How do you securely handle TLS/SSL in Java HTTP clients?**
+
+Use the JVM's default `SSLContext` for standard CA-signed certificates — it trusts the JDK's cacerts store (updated JDK keeps up with CA changes). For custom/internal CAs: load your CA certificate into a `KeyStore`, create a `TrustManagerFactory`, initialize an `SSLContext`, and pass it to your client builder. For mutual TLS (mTLS): also load the client certificate into a `KeyStore`, create a `KeyManagerFactory`, and init the `SSLContext` with both. NEVER disable hostname verification or trust-all in production — it defeats TLS entirely, making you vulnerable to MITM attacks. Pin certificates or public keys only for high-security scenarios (mobile clients, not server-to-server where certs rotate).
+
+---
+
+**Q15: How would you diagnose a "connection reset by peer" error?**
+
+`Connection reset` means the remote side sent a TCP RST packet instead of a graceful FIN. Causes: (1) Server closed the connection (keep-alive timeout expired) between requests — client tried to reuse a dead connection; fix: reduce client-side idle eviction time below server's keep-alive timeout; (2) Server crashed or was killed; (3) Load balancer or firewall forcibly closed idle connection; (4) Server-side code threw an exception after writing partial response and closed abruptly; (5) Client sent data after server closed (e.g., pipelining violation). Diagnose with: Wireshark/tcpdump to see the RST at the TCP level, server logs for uncaught exceptions, connection pool metrics for idle vs. active connection ratio.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+**Virtual Threads (Java 21) and Networking:**
+```java
+// Virtual threads make blocking I/O cheap — thread-per-connection is viable again
+// Each virtual thread is ~few KB vs ~1MB for OS thread
+// Socket.read() on a virtual thread unmounts from OS thread while blocked
+ExecutorService vt = Executors.newVirtualThreadPerTaskExecutor();
+
+// Simple high-concurrency server with virtual threads — no NIO complexity needed
+try (ServerSocket server = new ServerSocket(8080)) {
+    while (true) {
+        Socket client = server.accept();
+        // Spawning 100k virtual threads is fine — impossible with OS threads
+        vt.submit(() -> handleClient(client));
+    }
+}
+```
+
+**gRPC over HTTP/2:**
+```
+gRPC uses HTTP/2 framing with Protocol Buffers serialization.
+- Streaming RPCs: client-streaming, server-streaming, bidirectional
+- Strongly typed contracts via .proto files
+- Built-in deadlines, cancellation, flow control, load balancing hints
+- Requires HTTP/2 end-to-end — load balancers must be HTTP/2-aware
+- For Java: grpc-java library; HTTP/2 via Netty transport
+```
+
+**Network Observability — what senior engineers instrument:**
+```
+Per-client-pool metrics:
+  - connections.active, connections.idle, connections.pending
+  - request.duration (histogram — p50/p95/p99)
+  - request.errors (by status code, by exception type)
+  - retries.count, circuit_breaker.state
+
+JVM DNS cache:
+  networkaddress.cache.ttl (default: 30s in security context, unlimited otherwise)
+  Short TTL critical for service discovery with DNS-based load balancing
+  System.setProperty("networkaddress.cache.ttl", "5"); // or JVM flag
+```
+
+**Wireshark / tcpdump for diagnosis:**
+```bash
+# Capture HTTP traffic to port 8080
+tcpdump -i eth0 -w capture.pcap 'tcp port 8080'
+
+# Filter in Wireshark: follow TCP stream to see full HTTP conversation
+# Look for: RST packets (reset), retransmissions (packet loss), 
+#           window size 0 (backpressure), SYN without SYN-ACK (unreachable)
+```
+
+---
+
+## Summary / Cheat Sheet
+
+```
+SOCKET ESSENTIALS
+  ServerSocket(port)               → listen for connections
+  socket.connect(addr, timeout)    → connect with explicit timeout
+  setSoTimeout(ms)                 → read timeout (NOT connect timeout!)
+  setTcpNoDelay(true)             → low latency (disable Nagle)
+  setKeepAlive(true)              → OS keep-alive probes
+  setReuseAddress(true)           → reuse TIME_WAIT port (set before bind)
+  Always: try-with-resources, set both timeouts, flush buffers
+
+TCP vs UDP
+  TCP:  reliable, ordered, flow-controlled, connection-oriented
+  UDP:  fast, best-effort, datagram, supports multicast, 8-byte header
+  Choose UDP for: DNS, real-time media, gaming, service discovery
+
+HTTP VERSIONS
+  HTTP/1.1 → keep-alive, sequential, text-based, head-of-line blocking
+  HTTP/2   → multiplexed, binary, header compression, still TCP HOL blocking
+  HTTP/3   → QUIC (UDP), no TCP HOL blocking, 0-RTT resumption
+
+STATUS CODE TRAPS
+  401 → NOT authenticated (needs credentials)
+  403 → authenticated, but NOT authorized (no permission)
+  404 → not found (or deliberately hidden — same as 403 sometimes)
+  429 → rate limited → check Retry-After header
+  503 → unavailable → retry with backoff
+
+JAVA HTTP CLIENT (Java 11+)
+  Create ONE HttpClient, reuse everywhere — connection pool lives in it
+  .sendAsync() → CompletableFuture — non-blocking
+  .send()      → blocking — fine for non-reactive code
+  BodyHandlers.ofInputStream() for large responses — don't load into heap
+  Always set .timeout() on request AND .connectTimeout() on client
+
+HTTPCLIENT vs OKHTTP vs APACHE vs WEBCLIENT
+  Java HttpClient  → built-in, no dependencies, HTTP/2, good for most cases
+  OkHttp           → interceptors, mature retry, HTTP/2, Android compatible
+  Apache HC5       → most configurable, enterprise features, large ecosystem
+  WebClient        → reactive (non-blocking), Spring ecosystem, use in Reactor chains
+  RestClient       → Spring 6.1+, synchronous, modern API, replaces RestTemplate
+
+CONNECTION POOL RULES
+  One client instance per app (not per request!)
+  Idle eviction < server keep-alive timeout (nginx: 75s → evict at ~60s)
+  Size: threads × (response_time / request_time)
+  Monitor: active, idle, pending queue depth
+
+TIMEOUT HIERARCHY
+  DNS resolution timeout    → networkaddress.cache.ttl JVM property
+  Connect timeout           → socket.connect(addr, ms) or client connectTimeout
+  Request/read timeout      → setSoTimeout(ms) or HttpRequest.timeout()
+  Always set BOTH — they are independent
+
+PRODUCTION CHECKLIST
+  ✓ Set connect AND read timeouts
+  ✓ Retry with exponential backoff + jitter
+  ✓ Handle 429 with Retry-After header
+  ✓ Circuit breaker (Resilience4j) for downstream calls
+  ✓ Read and close error stream on non-2xx (HttpURLConnection)
+  ✓ Connection pool metrics in monitoring
+  ✓ Don't disable TLS hostname verification
+  ✓ SO_REUSEADDR on ServerSocket before bind
+  ✓ Virtual threads (Java 21) for high-concurrency blocking I/O
+
+SENIOR GOTCHAS
+  - new Socket(host, port) ignores connect timeout — use socket.connect(addr, ms)
+  - HttpURLConnection: not reading errorStream leaks connection
+  - OkHttp Response body must be closed — use try-with-resources
+  - WebClient .block() in reactive chain → deadlock
+  - Same host + different ClassLoader → ClassCastException (not networking, but ClassLoader)
+  - UDP: no ordering guarantee, 65507 byte max payload, no backpressure
+  - TIME_WAIT: normal, expected — not a bug; SO_REUSEADDR handles server restarts
+  - DNS caching: JVM caches indefinitely by default in some configs — set TTL explicitly
+```
+
+
+# Advanced Java Language Features — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+**Definition:** Advanced Java language features are syntactic and structural constructs that go beyond basic OOP, enabling more expressive, maintainable, and type-safe code. They span from classic inner/nested class mechanics to modern additions in Java 9–21+ (modules, sealed classes, pattern matching, records).
+
+**Why it matters:**
+- Signals deep JVM and language understanding in interviews
+- Many features directly impact encapsulation, API design, and compile-time safety
+- Modern features (sealed classes, pattern matching) are reshaping how Java handles algebraic data types and control flow
+- Modules are critical for large-scale enterprise and library design
+
+**Real-world applications:**
+- Inner/anonymous classes: GUI listeners, legacy callback patterns, `Comparator` usage
+- `var`: reducing boilerplate in complex generic code
+- Switch expressions: replacing verbose if-else chains in parsers, state machines
+- Sealed classes + pattern matching: building type-safe ASTs, domain models, protocol parsers
+- Modules: microservice JAR isolation, strong encapsulation in SDK design
+
+---
+
+## Core Concepts (Mental Model)
+
+```
+Java Type System
+├── Top-level classes
+└── Nested types
+    ├── Static nested classes     → like a top-level class, scoped inside another
+    ├── Inner classes             → holds implicit reference to outer instance
+    ├── Local classes             → defined inside a method
+    └── Anonymous classes         → local class with no name, inline declaration
+
+Modern Control Flow
+├── Switch statement (classic)
+├── Switch expression (Java 14+)  → yields a value
+└── Pattern matching
+    ├── instanceof (Java 16+)
+    └── switch patterns (Java 21+)
+
+Type Hierarchy Control
+└── Sealed classes (Java 17+)     → restricted subtyping
+
+Modularity
+└── Java Platform Module System (JPMS, Java 9+)
+```
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. Static Nested Classes
+
+**Definition:** A class declared `static` inside another class. Has no implicit reference to the enclosing class instance.
+
+**Key Details:**
+- Can access only `static` members of the outer class directly
+- Can be instantiated without an outer class instance
+- Used for logically grouping helper types that don't need outer state
+- Common in builder pattern, entry types (`Map.Entry`)
+
+```java
+public class Graph {
+    private List<Node> nodes;
+
+    // Static nested — doesn't need Graph instance
+    public static class Node {
+        private int value;
+        public Node(int value) { this.value = value; }
+    }
+
+    public static class Edge {
+        private Node from, to;
+        public Edge(Node from, Node to) {
+            this.from = from;
+            this.to = to;
+        }
+    }
+}
+
+// Usage — no Graph instance needed
+Graph.Node n1 = new Graph.Node(1);
+Graph.Node n2 = new Graph.Node(2);
+Graph.Edge edge = new Graph.Edge(n1, n2);
+```
+
+**Common Pitfalls:**
+- Forgetting `static` and creating an unintended memory leak (inner class holds outer reference)
+- Misusing as inner class when outer state is never needed
+
+---
+
+### 2. Inner Classes (Non-static)
+
+**Definition:** A non-static class declared inside another class. Holds an **implicit reference** to the enclosing outer class instance.
+
+**Key Details:**
+- Can access all members (including `private`) of the outer class
+- Cannot have `static` members (except `static final` constants)
+- Each inner class instance is tied to an outer class instance
+- Memory implication: inner instance prevents GC of outer instance
+
+```java
+public class EventBus {
+    private List<String> log = new ArrayList<>();
+
+    public class Subscriber {
+        private String name;
+
+        public Subscriber(String name) { this.name = name; }
+
+        public void receive(String event) {
+            // Directly accesses outer class's private field
+            log.add("[" + name + "] received: " + event);
+            System.out.println(log);
+        }
+    }
+}
+
+// Usage — must have outer instance first
+EventBus bus = new EventBus();
+EventBus.Subscriber sub = bus.new Subscriber("ServiceA");
+sub.receive("ORDER_CREATED");
+```
+
+**Accessing outer `this` explicitly:**
+```java
+public class Outer {
+    private String name = "Outer";
+
+    class Inner {
+        private String name = "Inner";
+
+        void print() {
+            System.out.println(name);          // Inner
+            System.out.println(Outer.this.name); // Outer — explicit outer reference
+        }
+    }
+}
+```
+
+**Common Pitfalls:**
+- Classic Android/Java memory leak: passing an inner class instance to a long-lived component (e.g., thread, cache) keeps the outer alive indefinitely
+- Serialization issues — inner classes are not easily serializable
+- Fix: use `static` nested class + pass needed outer state explicitly
+
+---
+
+### 3. Local Classes
+
+**Definition:** A class defined inside a method body. Scoped to that method.
+
+**Key Details:**
+- Can access `effectively final` local variables from the enclosing method
+- Rarely used in modern code (lambdas/anonymous classes usually preferred)
+- Can implement interfaces, extend classes
+
+```java
+public void processOrders(List<Order> orders) {
+    final String prefix = "ORDER"; // effectively final
+
+    class OrderFormatter {
+        String format(Order o) {
+            return prefix + "-" + o.getId(); // captures local var
+        }
+    }
+
+    OrderFormatter fmt = new OrderFormatter();
+    orders.forEach(o -> System.out.println(fmt.format(o)));
+}
+```
+
+---
+
+### 4. Anonymous Classes
+
+**Definition:** A one-off, nameless class that simultaneously declares and instantiates. Typically used to implement an interface or extend a class inline.
+
+**Key Details:**
+- Cannot have explicit constructors
+- Can capture `effectively final` variables
+- Pre-Java 8 workhorse for callbacks; now largely replaced by lambdas
+- Still relevant when you need to override multiple methods or maintain state
+
+```java
+// Pre-lambda callback pattern
+Comparator<String> byLength = new Comparator<String>() {
+    @Override
+    public int compare(String a, String b) {
+        return Integer.compare(a.length(), b.length());
+    }
+};
+
+// With state — lambdas can't do this as cleanly
+Runnable countingTask = new Runnable() {
+    private int count = 0; // anonymous class can have fields
+
+    @Override
+    public void run() {
+        System.out.println("Run #" + (++count));
+    }
+};
+
+// Anonymous class extending abstract class
+abstract class Template {
+    abstract void step1();
+    abstract void step2();
+    void run() { step1(); step2(); }
+}
+
+Template t = new Template() {
+    void step1() { System.out.println("Custom step 1"); }
+    void step2() { System.out.println("Custom step 2"); }
+};
+t.run();
+```
+
+**Anonymous vs Lambda:**
+| Aspect | Anonymous Class | Lambda |
+|---|---|---|
+| Target type | Any interface/class | Functional interface only |
+| `this` reference | Refers to anonymous instance | Refers to enclosing scope |
+| State (fields) | Yes | No (only captured finals) |
+| Verbosity | High | Low |
+
+**Common Pitfalls:**
+- Using anonymous classes when a lambda suffices (verbosity without benefit)
+- Forgetting `this` semantics difference from lambdas
+
+---
+
+### 5. `var` Keyword (Java 10+)
+
+**Definition:** Local variable type inference. The compiler infers the type from the right-hand side at compile time. It is **not** dynamic typing.
+
+**Key Details:**
+- Only for **local variables**, `for` loop variables, and try-with-resources
+- Cannot be used for fields, method parameters, or return types
+- Type is fixed at compile time — fully type-safe
+- Improves readability with complex generic types
+
+```java
+// Without var — verbose
+Map<String, List<Map<Integer, String>>> registry = new HashMap<>();
+
+// With var — cleaner
+var registry = new HashMap<String, List<Map<Integer, String>>>();
+
+// For-each
+var items = List.of("a", "b", "c");
+for (var item : items) {
+    System.out.println(item.toUpperCase()); // compiler knows item is String
+}
+
+// Try-with-resources
+try (var conn = DriverManager.getConnection(url);
+     var stmt = conn.createStatement()) {
+    var rs = stmt.executeQuery("SELECT 1");
+}
+
+// ILLEGAL uses:
+// var x;                  // no initializer
+// var x = null;           // type cannot be inferred
+// var x = {1, 2, 3};     // array initializer not allowed
+// public var field = 5;   // fields not allowed
+```
+
+**`var` in lambdas (Java 11+):**
+```java
+// Allows annotations on lambda params
+var result = list.stream()
+    .filter((@NonNull var s) -> !s.isEmpty())
+    .collect(Collectors.toList());
+```
+
+**Common Pitfalls:**
+- Overusing `var` where the type adds clarity (`var x = parse(data)` — what type?)
+- Confusing with `dynamic` typing — the type is still static
+- Using `var` with diamond operator can sometimes widen type unexpectedly:
+```java
+var list = new ArrayList<>();  // inferred as ArrayList<Object> — not ArrayList<String>!
+var list = new ArrayList<String>(); // correct
+```
+
+---
+
+### 6. Switch Expressions (Java 14+ stable)
+
+**Definition:** `switch` that produces a **value**, using arrow syntax or `yield`. Eliminates fall-through bugs and enables exhaustiveness.
+
+**Key Details:**
+- Arrow form (`->`) executes one branch, no fall-through
+- `yield` used to return values from blocks in switch expressions
+- Works with `int`, `String`, `enum`, and (Java 21+) patterns
+- Compiler enforces exhaustiveness for enums/sealed types
+
+```java
+// Classic switch statement (error-prone)
+String result;
+switch (day) {
+    case MONDAY:
+    case TUESDAY:
+        result = "Weekday";
+        break;
+    case SATURDAY:
+    case SUNDAY:
+        result = "Weekend";
+        break;
+    default:
+        result = "Midweek";
+}
+
+// Switch expression — arrow form
+String result = switch (day) {
+    case MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY -> "Weekday";
+    case SATURDAY, SUNDAY -> "Weekend";
+};
+
+// Switch expression — with blocks and yield
+int score = switch (grade) {
+    case "A" -> 100;
+    case "B" -> 85;
+    case "C" -> {
+        System.out.println("Average grade");
+        yield 70; // yield required in block form
+    }
+    default -> throw new IllegalArgumentException("Unknown: " + grade);
+};
+
+// With enum — exhaustive (no default needed if all cases covered)
+enum Status { ACTIVE, INACTIVE, PENDING }
+
+String label = switch (status) {
+    case ACTIVE  -> "Running";
+    case INACTIVE -> "Stopped";
+    case PENDING -> "Waiting";
+    // No default needed — compiler verifies exhaustiveness
+};
+```
+
+**Common Pitfalls:**
+- Mixing arrow and colon forms in the same switch (compile error)
+- Forgetting `yield` inside a block-form switch expression
+- Using statement-form `switch` where expression is cleaner
+
+---
+
+### 7. Pattern Matching
+
+#### 7a. `instanceof` Pattern Matching (Java 16+)
+
+**Definition:** Combines type check and cast into a single expression.
+
+```java
+// Old way — redundant cast
+if (obj instanceof String) {
+    String s = (String) obj;  // redundant
+    System.out.println(s.length());
+}
+
+// Pattern matching — binding variable scoped to true branch
+if (obj instanceof String s) {
+    System.out.println(s.length()); // s is String here, no cast
+}
+
+// Negative branch — s NOT available (compiler enforced)
+if (!(obj instanceof String s)) {
+    return; // s not in scope here
+}
+System.out.println(s.length()); // s IS available — flow-sensitive typing
+
+// Combined conditions
+if (obj instanceof String s && s.length() > 5) {
+    System.out.println(s.toUpperCase());
+}
+```
+
+#### 7b. Pattern Matching in `switch` (Java 21+ stable)
+
+**Definition:** Switch can now match on type patterns, allowing type-safe dispatch over object hierarchies.
+
+```java
+sealed interface Shape permits Circle, Rectangle, Triangle {}
+record Circle(double radius) implements Shape {}
+record Rectangle(double width, double height) implements Shape {}
+record Triangle(double base, double height) implements Shape {}
+
+double area(Shape shape) {
+    return switch (shape) {
+        case Circle c    -> Math.PI * c.radius() * c.radius();
+        case Rectangle r -> r.width() * r.height();
+        case Triangle t  -> 0.5 * t.base() * t.height();
+        // No default needed — sealed hierarchy is exhaustive
+    };
+}
+```
+
+**Guarded patterns:**
+```java
+String describe(Object obj) {
+    return switch (obj) {
+        case Integer i when i < 0  -> "Negative int";
+        case Integer i when i == 0 -> "Zero";
+        case Integer i             -> "Positive int: " + i;
+        case String s when s.isEmpty() -> "Empty string";
+        case String s              -> "String: " + s;
+        case null                  -> "null value";
+        default                    -> "Other: " + obj.getClass().getName();
+    };
+}
+```
+
+**Deconstruction patterns (Java 21+ preview → stabilizing):**
+```java
+record Point(int x, int y) {}
+
+// Destructure directly in switch
+if (obj instanceof Point(int x, int y)) {
+    System.out.println("x=" + x + ", y=" + y);
+}
+```
+
+**Common Pitfalls:**
+- Pattern variable `s` shadowing outer variables — compiler warns
+- Null handling: classic `switch` throws NPE on null; switch patterns can handle `case null` explicitly
+
+---
+
+### 8. Sealed Classes (Java 17+)
+
+**Definition:** Restricts which classes/interfaces can extend or implement a type. Creates **closed type hierarchies** that the compiler can reason about exhaustively.
+
+**Key Details:**
+- Declared with `sealed` modifier + `permits` clause
+- Permitted subtypes must be: `final`, `sealed`, or `non-sealed`
+- All permitted subclasses must be in the same package (or module)
+- Enables exhaustive switch expressions without `default`
+- Perfect companion to records and pattern matching (the "algebraic data type" trio)
+
+```java
+// Sealed interface with permitted implementations
+sealed interface Result<T> permits Success, Failure, Pending {}
+
+record Success<T>(T value) implements Result<T> {}
+record Failure<T>(String error, Throwable cause) implements Result<T> {}
+final class Pending<T> implements Result<T> {}  // not a record, but final
+
+// Compiler-verified exhaustiveness
+<T> String describe(Result<T> result) {
+    return switch (result) {
+        case Success<T> s  -> "OK: " + s.value();
+        case Failure<T> f  -> "ERR: " + f.error();
+        case Pending<T> p  -> "PENDING";
+        // No default needed — compiler knows all subtypes
+    };
+}
+```
+
+**Sealed interface hierarchy (tree of types):**
+```java
+sealed interface Expr permits Num, Add, Mul, Neg {}
+
+record Num(int value)         implements Expr {}
+record Add(Expr left, Expr right) implements Expr {}
+record Mul(Expr left, Expr right) implements Expr {}
+record Neg(Expr expr)         implements Expr {}
+
+// Recursive evaluator
+int eval(Expr e) {
+    return switch (e) {
+        case Num(int v)          -> v;
+        case Add(var l, var r)   -> eval(l) + eval(r);
+        case Mul(var l, var r)   -> eval(l) * eval(r);
+        case Neg(var inner)      -> -eval(inner);
+    };
+}
+```
+
+**`non-sealed` escape hatch:**
+```java
+sealed interface Vehicle permits Car, Truck, OpenVehicle {}
+final class Car implements Vehicle {}
+final class Truck implements Vehicle {}
+non-sealed class OpenVehicle implements Vehicle {} // anyone can extend this
+class Bicycle extends OpenVehicle {} // allowed
+```
+
+**Common Pitfalls:**
+- Permitted subclasses must explicitly `extend`/`implement` the sealed type — won't compile otherwise
+- If one subtype is `non-sealed`, the switch is no longer exhaustive without `default`
+- Cannot use sealed with classes in different packages (unless same module)
+
+---
+
+### 9. Java Platform Module System — JPMS (Java 9+)
+
+**Definition:** A module is a named, self-describing collection of packages with explicit dependencies and exports. Declared in `module-info.java`.
+
+**Key Details:**
+- Replaces the fragile classpath with strong encapsulation
+- Internal packages are inaccessible by default (unlike classpath where everything is visible)
+- Enables JVM to link only required modules (smaller runtime images via `jlink`)
+- Critical for large codebases, SDKs, and security-sensitive applications
+
+**Module descriptor syntax:**
+```java
+// module-info.java at root of module source
+module com.company.payments {
+    // What this module depends on
+    requires java.net.http;          // hard dependency
+    requires transitive java.logging; // transitive — consumers also get this
+    requires static org.junit;        // optional at runtime (compile-time only)
+
+    // What this module exposes
+    exports com.company.payments.api;          // to everyone
+    exports com.company.payments.internal      // only to these modules
+        to com.company.admin, com.company.audit;
+
+    // Reflection access (for frameworks like Spring, Hibernate)
+    opens com.company.payments.model;          // open for deep reflection
+    opens com.company.payments.config to spring.core;
+
+    // Service provider interface pattern
+    uses com.company.payments.spi.Gateway;
+    provides com.company.payments.spi.Gateway
+        with com.company.payments.impl.StripeGateway;
+}
+```
+
+**Module types:**
+| Type | Description |
+|---|---|
+| Named module | Has `module-info.java`, on module path |
+| Automatic module | JAR on module path without `module-info.java` — module name from JAR name |
+| Unnamed module | JAR on classpath — can access all, accessible to no named module |
+
+**Directory structure:**
+```
+src/
+└── com.company.payments/
+    ├── module-info.java
+    └── com/company/payments/
+        ├── api/
+        │   └── PaymentService.java
+        └── internal/
+            └── PaymentProcessor.java  ← inaccessible outside module
+
+```
+
+**Compiling and running with modules:**
+```bash
+# Compile
+javac -d out --module-source-path src \
+      $(find src -name "*.java")
+
+# Run
+java --module-path out \
+     --module com.company.payments/com.company.payments.Main
+
+# Create minimal runtime image
+jlink --module-path $JAVA_HOME/jmods:out \
+      --add-modules com.company.payments \
+      --output custom-runtime
+```
+
+**Reflection and module access (common framework issue):**
+```bash
+# If Spring/Hibernate needs reflective access — add at runtime:
+java --module-path out \
+     --add-opens com.company.payments/com.company.payments.model=spring.core \
+     --module com.company.app/com.company.app.Main
+```
+
+**Common Pitfalls:**
+- `InaccessibleObjectException` — forgetting to `open` packages used by reflection-heavy frameworks
+- Split packages: same package in two modules — forbidden, common in legacy migration
+- Automatic modules are a migration bridge — don't rely on them permanently
+- `module-info.java` must be at the module root, not in a subpackage
+
+---
+
+## Interview Questions — 15 Deep-Dive Q&As
+
+---
+
+**Q1. What is the difference between a static nested class and an inner class?**
+
+> A **static nested class** has no implicit reference to its enclosing class instance and can be instantiated independently (`new Outer.Nested()`). An **inner class** holds an implicit `Outer.this` reference — every inner instance is bound to an outer instance and is instantiated via `outerRef.new Inner()`. Key consequence: inner classes prevent GC of the outer instance, while static nested classes don't. Prefer static nested unless you genuinely need access to outer instance state.
+
+---
+
+**Q2. What is an effectively final variable and why does it matter for anonymous/inner classes?**
+
+> A variable is "effectively final" if it is never reassigned after initialization (even without the `final` keyword). Anonymous classes, local classes, and lambdas can only capture effectively final local variables because they may outlive the stack frame where the variable was declared. The compiler captures the *value* at capture time, so mutating it afterward would create inconsistency. Violating this causes a compile error: `"Variable used in lambda/anonymous class must be final or effectively final"`.
+
+---
+
+**Q3. Is `var` dynamically typed? When should you avoid it?**
+
+> No. `var` is purely a compile-time type inference feature — the type is resolved statically and fixed. The bytecode is identical to explicit typing. Avoid `var` when: (1) the right-hand side doesn't make the type obvious (`var result = process(data)` — what is `result`?), (2) at API boundaries (can't use for fields/params), (3) with raw types or unparameterized generics where inference widens to `Object`. Use it freely for complex generic types where the type name adds noise but the context is clear.
+
+---
+
+**Q4. What is the difference between `switch` statement and `switch` expression?**
+
+> A `switch` **statement** controls flow but produces no value; it uses `break` to prevent fall-through and is prone to accidental fall-through bugs. A `switch` **expression** produces a value and uses arrow syntax (`->`) or `yield` in blocks. Arrow-form has no fall-through. The compiler enforces **exhaustiveness** for switch expressions (every possible input must be covered), which catches bugs at compile time. Switch expressions are preferred in modern Java for assigning values based on conditions.
+
+---
+
+**Q5. What happens if you don't handle `null` in a pattern matching switch?**
+
+> A `switch` with pattern matching throws `NullPointerException` if the selector expression is `null` and there is no explicit `case null`. This is a deliberate design — you must opt-in to null handling. Best practice: add `case null -> ...` or handle null before the switch. Classic `switch` on primitives/strings also throws NPE on null, so this behavior is consistent.
+
+---
+
+**Q6. What are sealed classes and how do they work with pattern matching?**
+
+> Sealed classes restrict their inheritance hierarchy to a known, compile-time set of permitted subtypes (via `permits`). This creates a **closed algebraic data type**. Combined with pattern matching in `switch`, the compiler can verify exhaustiveness — if all permitted subtypes are covered, no `default` is needed. This is powerful for domain modeling (e.g., `Result<T>` with `Success`/`Failure`/`Pending`) because adding a new subtype to the sealed hierarchy causes compile errors at all switch sites that don't handle it, acting like a compiler-enforced contract.
+
+---
+
+**Q7. What is the `non-sealed` modifier and when would you use it?**
+
+> `non-sealed` reopens a branch of a sealed hierarchy to unrestricted extension. It's an escape hatch for when you want most of your hierarchy controlled but need one subtype to be freely extensible (e.g., for third-party extensibility). The trade-off: any `switch` covering the sealed hierarchy must now include a `default` case because the `non-sealed` branch can have unknown subtypes.
+
+---
+
+**Q8. Explain the difference between `exports`, `opens`, and `requires transitive` in JPMS.**
+
+> - **`exports pkg`**: Makes types in `pkg` accessible at compile and runtime to other modules (but not via deep reflection).
+> - **`opens pkg`**: Makes types in `pkg` accessible for **deep reflection** (e.g., setting private fields) at runtime. Required by frameworks like Spring, Hibernate, JPA.
+> - **`requires transitive M`**: This module depends on M, and any module depending on *this* module also implicitly depends on M. Used when your public API returns types from M — callers would need M too.
+
+---
+
+**Q9. What is a split package in JPMS and why is it a problem?**
+
+> A split package occurs when two modules both contain classes in the same package. JPMS forbids this because the module system needs each package to belong to exactly one module for reliable encapsulation. This is a common pain point when migrating legacy codebases where packages were spread across JARs. Fix: refactor packages so each belongs to one module, or consolidate the JARs.
+
+---
+
+**Q10. How does anonymous class `this` differ from lambda `this`?**
+
+> In an **anonymous class**, `this` refers to the anonymous class instance itself. In a **lambda**, `this` refers to the enclosing class instance (the lexical `this`). This means lambdas cannot reference themselves (`this.someMethod()` refers to the outer class), while anonymous classes can. This also means lambdas cannot be used when `this` self-reference is needed (e.g., recursive anonymous Runnable that re-schedules itself).
+
+---
+
+**Q11. Can a sealed class be abstract? Can it be a record?**
+
+> Yes to both. A sealed class can be `abstract sealed` — it can't be instantiated directly, and all permitted subtypes must still be `final`/`sealed`/`non-sealed`. Records can implement sealed interfaces (common pattern): `record Success<T>(T value) implements Result<T> {}`. Records are implicitly `final`, which satisfies the sealed hierarchy constraint. This combination (sealed interface + records as data carriers) is the idiomatic Java algebraic data type pattern.
+
+---
+
+**Q12. What is `yield` in a switch expression and when is it required?**
+
+> `yield` is used inside a **block** (`{ ... }`) in a switch expression to return a value from that block. It is required whenever you use the colon/block form inside a switch expression and need to return a value. In the arrow form (`case X -> value`), the value after `->` is implicitly yielded — no `yield` keyword needed. `yield` is a **context-sensitive keyword** (not reserved), so existing code with a variable named `yield` still compiles.
+
+---
+
+**Q13. What is the module path vs classpath and how do they interact?**
+
+> The **classpath** is the legacy mechanism — all JARs are visible to each other with no encapsulation. The **module path** is the JPMS mechanism — JARs with `module-info.java` are named modules with declared dependencies and exports. A JAR on the module path without `module-info.java` becomes an **automatic module** (module name derived from JAR filename). A JAR on the classpath is part of the **unnamed module** — it can access all named modules' exported packages but named modules cannot `requires` the unnamed module. This asymmetry is intentional for gradual migration.
+
+---
+
+**Q14. When would you use a local class over an anonymous class or lambda?**
+
+> Use a **local class** when you need a named type you can instantiate multiple times within the method, or when you need multiple methods (anonymous classes are limited to one interface/class). Use an **anonymous class** for a one-off implementation with possible state or multiple method overrides. Use a **lambda** when the target is a functional interface and no state or `this` self-reference is needed. In practice, local classes are rare in modern code — lambdas handle most cases.
+
+---
+
+**Q15. How would you design a type-safe error handling type using sealed classes, records, and pattern matching?**
+
+```java
+sealed interface ApiResult<T> permits ApiResult.Ok, ApiResult.Err {
+    record Ok<T>(T data) implements ApiResult<T> {}
+    record Err<T>(int code, String message) implements ApiResult<T> {}
+
+    // Factory methods
+    static <T> ApiResult<T> ok(T data) { return new Ok<>(data); }
+    static <T> ApiResult<T> err(int code, String msg) { return new Err<>(code, msg); }
+}
+
+// Usage — exhaustive, no casting
+ApiResult<User> result = userService.findById(id);
+String response = switch (result) {
+    case ApiResult.Ok<User>(User u)        -> "Found: " + u.name();
+    case ApiResult.Err<User>(int c, var m) -> "Error " + c + ": " + m;
+};
+```
+
+> This pattern gives you ML-style `Option`/`Either` types in Java with full compiler enforcement. Adding a new case to `ApiResult` breaks all existing switches — the compiler finds every site needing update.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+### Memory and Performance
+- **Inner class memory leak**: Pass inner class instances to thread pools, caches, or static fields → outer instance is permanently retained. Use `WeakReference` or refactor to static nested
+- **Anonymous class bloat**: Each anonymous class generates a synthetic `.class` file. In hot paths, lambdas may be more JIT-friendly (captured as `invokedynamic`)
+- **`var` has zero runtime cost** — purely compile-time; bytecode identical to explicit type
+
+### Design Patterns Enabled
+- **Visitor pattern** → replaced by sealed classes + pattern matching switch (no boilerplate)
+- **Builder pattern** → static nested class is idiomatic (`Person.Builder`)
+- **Strategy pattern** → functional interfaces + lambdas (anonymous class was pre-Java 8 approach)
+- **Algebraic data types** → sealed + records + pattern matching
+
+### Modularity at Scale
+- JPMS enables **strong encapsulation**: internal implementation packages are truly hidden (unlike just "don't use this" convention)
+- Use `jdeps` to analyze actual dependencies before modularizing: `jdeps --print-module-deps myapp.jar`
+- **jlink** creates minimal JRE bundles — critical for containerized microservices (reduces image from ~300MB to ~40MB)
+- Service loader (`uses`/`provides`) enables plugin architectures without coupling
+
+### Integration with Other Systems
+- **Spring/Hibernate** use reflection heavily → must `opens` packages to framework modules, or use `--add-opens` JVM flags
+- **Lombok** generates code that may conflict with records (prefer records over Lombok `@Value` in Java 16+)
+- **Pattern matching + Jackson**: serialize/deserialize sealed hierarchies using `@JsonSubTypes` or configure ObjectMapper for polymorphic types
+
+### Java Version Roadmap (Feature Timeline)
+```
+Java 9  → Modules (JPMS)
+Java 10 → var (local variables)
+Java 11 → var in lambda params
+Java 14 → Switch expressions (stable)
+Java 16 → instanceof pattern matching (stable)
+Java 16 → Records (stable)
+Java 17 → Sealed classes (stable)
+Java 21 → Pattern matching for switch (stable), Record patterns (stable)
+```
+
+---
+
+## Summary / Cheat Sheet
+
+```
+NESTED TYPES
+┌─────────────────────────────────────────────────────────────┐
+│ static nested   → no outer ref, instantiate freely          │
+│ inner class     → holds Outer.this, needs outer instance    │
+│ local class     → in method, captures effectively final vars│
+│ anonymous class → inline, one-off, can have fields          │
+└─────────────────────────────────────────────────────────────┘
+
+VAR
+• Compile-time inference only — NOT dynamic typing
+• Only local vars, for-each, try-with-resources
+• Avoid when type is non-obvious from RHS
+
+SWITCH EXPRESSION
+• Arrow form (->): no fall-through, value is RHS
+• Block form: requires yield to return value
+• Compiler enforces exhaustiveness
+
+PATTERN MATCHING
+• instanceof: if (x instanceof Foo f) — f scoped to true branch
+• switch: case Foo f -> ..., case Bar b when b.x() > 0 -> ...
+• Null: add case null -> or handle before switch
+
+SEALED CLASSES
+• sealed + permits → closed hierarchy
+• Permitted types must be final | sealed | non-sealed
+• Enables exhaustive switch without default
+• Combine with records for algebraic data types
+
+MODULES (JPMS)
+• exports pkg       → public API (no reflection)
+• opens pkg         → reflection access (for frameworks)
+• requires M        → hard dependency
+• requires transitive M → dependency exposed to consumers
+• Split packages forbidden
+• unnamed module (classpath) ≠ named module (module path)
+```
+
+**Senior engineer differentiators to mention:**
+- Memory implications of inner class captures (GC roots, leaks)
+- Sealed + records + pattern matching as Java's ADT answer
+- JPMS `opens` vs `exports` distinction (critical for Spring/Hibernate)
+- `var` inference widening gotcha with raw generics
+- `yield` as context-sensitive keyword (not reserved)
+- Exhaustiveness checking as compile-time correctness guarantee
+
+# JDBC — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+**Definition:** Java Database Connectivity (JDBC) is a standard Java API (`java.sql`, `javax.sql`) that provides a uniform interface for connecting to and interacting with relational databases, regardless of the underlying database vendor.
+
+**Why it matters:**
+- Foundation of every Java data access layer — JPA/Hibernate, Spring Data, MyBatis all sit on top of JDBC
+- Understanding JDBC deeply means you can diagnose ORM issues, tune performance, and reason about what SQL is actually being executed
+- Direct JDBC is still used in high-throughput, latency-sensitive paths where ORM overhead is unacceptable
+- Transactions, connection pooling, and batch processing are senior-level concerns in any production system
+
+**Real-world applications:**
+- Every Spring `JdbcTemplate` / `NamedParameterJdbcTemplate` call goes through JDBC
+- Hibernate's JDBC connection management, dirty checking flush, and batch insert tuning
+- Microservices with HikariCP pools hitting PostgreSQL/MySQL
+- ETL pipelines using batch JDBC inserts for bulk data loading
+- Financial systems where explicit transaction control is mandatory
+
+---
+
+## Core Concepts (Mental Model)
+
+```
+Application Code
+      │
+      ▼
+ JDBC API (java.sql.*)          ← standard interfaces your code targets
+      │
+      ▼
+ JDBC Driver Manager            ← selects and loads the correct driver
+      │
+      ▼
+ JDBC Driver (vendor JAR)       ← translates JDBC calls to DB wire protocol
+      │
+      ▼
+ Database Server                ← PostgreSQL, MySQL, Oracle, etc.
+
+Key objects and their lifecycle:
+DriverManager / DataSource
+    └── Connection              ← session with the DB
+          ├── Statement         ← ad-hoc SQL, no parameters
+          ├── PreparedStatement ← pre-compiled SQL, parameters
+          └── CallableStatement ← stored procedures
+                └── ResultSet  ← cursor over query results
+                      └── ResultSetMetaData
+```
+
+---
+
+## Subtopics Breakdown
+
+---
+
+### 1. JDBC Architecture
+
+**Definition:** JDBC follows a two-layer model — the API layer (standard Java interfaces) and the Driver layer (vendor implementations). Your application always talks to the API; the driver handles translation to the specific database protocol.
+
+**Key architectural layers:**
+
+```
+┌──────────────────────────────────────────────────┐
+│             Application Layer                    │
+│   (your Java code using java.sql.* interfaces)   │
+└──────────────────────┬───────────────────────────┘
+                       │ JDBC API calls
+┌──────────────────────▼───────────────────────────┐
+│            JDBC Driver Manager                   │
+│   (DriverManager or DataSource routing)          │
+└──────────────────────┬───────────────────────────┘
+                       │ delegates to registered driver
+┌──────────────────────▼───────────────────────────┐
+│              JDBC Driver (vendor)                │
+│  PostgreSQL Driver │ MySQL Connector │ OracleDB  │
+└──────────────────────┬───────────────────────────┘
+                       │ native DB protocol (TCP)
+┌──────────────────────▼───────────────────────────┐
+│                Database Server                   │
+└──────────────────────────────────────────────────┘
+```
+
+**Two-tier vs Three-tier:**
+- **Two-tier**: Java app connects directly to DB (typical microservice)
+- **Three-tier**: Java app → application server (connection pool) → DB (enterprise pattern)
+
+**Key interfaces in `java.sql`:**
+
+| Interface | Responsibility |
+|---|---|
+| `Driver` | Entry point for a vendor driver |
+| `DriverManager` | Manages registered drivers, creates connections |
+| `Connection` | Represents an active DB session |
+| `Statement` | Executes static SQL |
+| `PreparedStatement` | Pre-compiled parameterized SQL |
+| `CallableStatement` | Stored procedure execution |
+| `ResultSet` | Cursor over query result rows |
+| `DatabaseMetaData` | Schema, capability introspection |
+| `ResultSetMetaData` | Column type/name introspection |
+
+**`javax.sql` extensions (enterprise):**
+
+| Interface | Responsibility |
+|---|---|
+| `DataSource` | Factory for connections (replaces `DriverManager` in production) |
+| `ConnectionPoolDataSource` | Driver-side pooling support |
+| `XADataSource` | Distributed (XA) transaction support |
+
+---
+
+### 2. JDBC Drivers
+
+**Definition:** A JDBC driver is a vendor-provided implementation of the `java.sql.Driver` interface that translates JDBC API calls into the database's native wire protocol.
+
+**Four driver types (historical but commonly asked):**
+
+| Type | Name | Mechanism | Notes |
+|---|---|---|---|
+| 1 | JDBC-ODBC Bridge | Java → ODBC → DB | Deprecated, removed Java 8+ |
+| 2 | Native API | Java + native C libs | Platform-dependent |
+| 3 | Network Protocol | Pure Java → middleware | Flexible, adds hop |
+| 4 | Thin Driver | Pure Java → DB protocol directly | **Standard today** |
+
+> In practice, all modern drivers are Type 4: `postgresql-42.x.jar`, `mysql-connector-j-8.x.jar`, `ojdbc11.jar`.
+
+**Driver registration (Java 6+ SPI — automatic):**
+```java
+// Pre-Java 6 — explicit class loading required
+Class.forName("org.postgresql.Driver"); // triggers static initializer
+
+// Java 6+ — ServiceLoader SPI auto-discovers drivers from META-INF/services
+// Just having the JAR on the classpath is sufficient
+Connection conn = DriverManager.getConnection(url, user, pass);
+```
+
+**Driver manager vs DataSource:**
+```java
+// DriverManager — simple, no pooling, suitable for scripts/tests only
+Connection conn = DriverManager.getConnection(
+    "jdbc:postgresql://localhost:5432/mydb",
+    "user",
+    "password"
+);
+
+// DataSource — production standard; supports pooling, JNDI, XA
+// (Configured via HikariCP, c3p0, DBCP — covered in Connection Pooling section)
+DataSource ds = buildDataSource();
+Connection conn = ds.getConnection(); // from pool
+```
+
+**Common Pitfalls:**
+- Using `DriverManager` in production — no connection pooling, no health checks
+- Multiple driver JARs for the same DB with conflicting versions causing `No suitable driver found`
+- Forgetting to add the JDBC driver JAR to the classpath/module path
+
+---
+
+### 3. Connections
+
+**Definition:** A `Connection` represents a single, active session between your application and the database. It is the most expensive JDBC resource to create (TCP handshake, auth, server-side session allocation).
+
+**Opening a connection:**
+```java
+String url  = "jdbc:postgresql://localhost:5432/orders";
+String user = "app_user";
+String pass = "secret";
+
+// Properties-based — cleaner for many parameters
+Properties props = new Properties();
+props.setProperty("user", user);
+props.setProperty("password", pass);
+props.setProperty("connectTimeout", "5");       // seconds
+props.setProperty("socketTimeout", "30");
+props.setProperty("ssl", "true");
+
+try (Connection conn = DriverManager.getConnection(url, props)) {
+    // use conn
+} // auto-closed via AutoCloseable
+```
+
+**Connection URL formats by database:**
+```
+PostgreSQL:  jdbc:postgresql://host:5432/dbname?ssl=true
+MySQL:       jdbc:mysql://host:3306/dbname?useSSL=true&serverTimezone=UTC
+Oracle:      jdbc:oracle:thin:@host:1521:SID
+             jdbc:oracle:thin:@//host:1521/serviceName
+SQL Server:  jdbc:sqlserver://host:1433;databaseName=db;encrypt=true
+H2 (test):   jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
+```
+
+**Connection state:**
+```java
+conn.setAutoCommit(false);          // disable auto-commit for transactions
+conn.setTransactionIsolation(
+    Connection.TRANSACTION_REPEATABLE_READ); // isolation level
+conn.setReadOnly(true);             // hint to driver/DB: read-only session
+conn.setCatalog("orders");          // switch database (MySQL)
+conn.setSchema("billing");          // switch schema (PostgreSQL)
+
+// Introspect
+DatabaseMetaData meta = conn.getMetaData();
+System.out.println(meta.getDatabaseProductName());   // "PostgreSQL"
+System.out.println(meta.getDriverVersion());
+System.out.println(meta.supportsTransactions());
+System.out.println(meta.getMaxConnections());
+```
+
+**Always use try-with-resources:**
+```java
+// WRONG — connection leak if exception thrown before close()
+Connection conn = ds.getConnection();
+Statement stmt = conn.createStatement();
+ResultSet rs = stmt.executeQuery("SELECT 1"); // exception here → leak!
+rs.close();
+stmt.close();
+conn.close();
+
+// CORRECT — nested try-with-resources, all closed in reverse order
+try (Connection conn = ds.getConnection();
+     Statement stmt = conn.createStatement();
+     ResultSet rs = stmt.executeQuery("SELECT 1")) {
+    while (rs.next()) {
+        System.out.println(rs.getInt(1));
+    }
+} // rs, stmt, conn closed automatically even on exception
+```
+
+**Common Pitfalls:**
+- Not closing connections → pool exhaustion, DB connection limit hit
+- Not closing in the right order: `ResultSet` → `Statement` → `Connection`
+- Opening connections in loops without closing them
+- Sharing a `Connection` across threads — `Connection` is **not thread-safe**
+
+---
+
+### 4. Statements
+
+**Definition:** `Statement` executes a static SQL string with no parameters. The SQL is sent as-is to the database for parsing and execution each time.
+
+```java
+try (Connection conn = ds.getConnection();
+     Statement stmt = conn.createStatement()) {
+
+    // DDL
+    stmt.execute("CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT)");
+
+    // DML — returns update count
+    int rows = stmt.executeUpdate("INSERT INTO users (name) VALUES ('Alice')");
+    System.out.println("Inserted: " + rows);
+
+    // Query — returns ResultSet
+    try (ResultSet rs = stmt.executeQuery("SELECT id, name FROM users")) {
+        while (rs.next()) {
+            System.out.printf("id=%d, name=%s%n", rs.getInt("id"), rs.getString("name"));
+        }
+    }
+
+    // execute() — works for any SQL, use when you don't know what you're running
+    boolean isResultSet = stmt.execute("SELECT 1");
+    if (isResultSet) {
+        try (ResultSet rs = stmt.getResultSet()) { /* ... */ }
+    } else {
+        int updateCount = stmt.getUpdateCount();
+    }
+}
+```
+
+**Statement execute methods:**
+| Method | Returns | Use case |
+|---|---|---|
+| `execute(sql)` | `boolean` (true = ResultSet) | Unknown SQL type |
+| `executeQuery(sql)` | `ResultSet` | SELECT |
+| `executeUpdate(sql)` | `int` (rows affected) | INSERT/UPDATE/DELETE/DDL |
+| `executeLargUpdate(sql)` | `long` | Large batch updates |
+
+**ResultSet scrollability and concurrency:**
+```java
+// Default: TYPE_FORWARD_ONLY, CONCUR_READ_ONLY
+Statement stmt = conn.createStatement();
+
+// Scrollable — can move forward, backward, absolute positioning
+Statement scrollable = conn.createStatement(
+    ResultSet.TYPE_SCROLL_INSENSITIVE,  // snapshot of data
+    ResultSet.CONCUR_READ_ONLY
+);
+ResultSet rs = scrollable.executeQuery("SELECT * FROM products");
+rs.last();                    // jump to last row
+int rowCount = rs.getRow();   // total rows
+rs.beforeFirst();             // reset to start
+rs.absolute(5);               // jump to row 5
+
+// Updatable ResultSet — directly update rows in DB
+Statement updatable = conn.createStatement(
+    ResultSet.TYPE_SCROLL_SENSITIVE,
+    ResultSet.CONCUR_UPDATABLE
+);
+ResultSet rs2 = updatable.executeQuery("SELECT id, price FROM products");
+while (rs2.next()) {
+    rs2.updateDouble("price", rs2.getDouble("price") * 1.1); // 10% price hike
+    rs2.updateRow(); // write to DB
+}
+```
+
+**Common Pitfalls:**
+- **SQL injection**: concatenating user input into `Statement` SQL — always use `PreparedStatement` instead
+- Opening a `ResultSet`, then forgetting to close it (or `Statement`), while the `Connection` stays open → cursor leak on the DB server
+- `executeQuery` on non-SELECT SQL throws exception on some drivers
+
+---
+
+### 5. Prepared Statements
+
+**Definition:** `PreparedStatement` pre-compiles SQL on the database side with parameter placeholders (`?`). Parameters are bound separately from the SQL, preventing SQL injection and enabling re-use of the execution plan.
+
+**Key Details:**
+- SQL is parsed and compiled **once**; parameters substituted each execution
+- Eliminates SQL injection — parameters are always treated as data, never as SQL
+- Better performance for repeated execution (plan cache hit)
+- Type-safe parameter binding
+- Supports `NULL`, binary data (`BLOB`), and large objects (`CLOB`)
+
+```java
+String sql = "INSERT INTO orders (customer_id, amount, status, created_at) " +
+             "VALUES (?, ?, ?, ?)";
+
+try (Connection conn = ds.getConnection();
+     PreparedStatement ps = conn.prepareStatement(sql)) {
+
+    // Bind by position (1-indexed)
+    ps.setInt(1, customerId);
+    ps.setBigDecimal(2, new BigDecimal("99.99"));
+    ps.setString(3, "PENDING");
+    ps.setTimestamp(4, Timestamp.from(Instant.now()));
+
+    int rowsInserted = ps.executeUpdate();
+
+    // Reuse — clear parameters and re-execute (same plan, different data)
+    ps.clearParameters();
+    ps.setInt(1, otherCustomerId);
+    ps.setBigDecimal(2, new BigDecimal("149.50"));
+    ps.setString(3, "CONFIRMED");
+    ps.setTimestamp(4, Timestamp.from(Instant.now()));
+    ps.executeUpdate();
+}
+```
+
+**SELECT with PreparedStatement:**
+```java
+String sql = "SELECT id, name, email FROM customers " +
+             "WHERE region = ? AND active = ? ORDER BY name";
+
+try (Connection conn = ds.getConnection();
+     PreparedStatement ps = conn.prepareStatement(sql)) {
+
+    ps.setString(1, "EMEA");
+    ps.setBoolean(2, true);
+
+    try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) {
+            int id       = rs.getInt("id");
+            String name  = rs.getString("name");
+            String email = rs.getString("email");
+        }
+    }
+}
+```
+
+**Handling NULLs:**
+```java
+// Setting NULL — must specify SQL type
+if (middleName != null) {
+    ps.setString(2, middleName);
+} else {
+    ps.setNull(2, Types.VARCHAR);
+}
+
+// Reading NULL — always check wasNull() after numeric types
+double salary = rs.getDouble("salary");
+if (rs.wasNull()) {
+    // salary column was NULL — do not use the 0.0 default
+}
+// String/Object types return null directly:
+String nickname = rs.getString("nickname"); // null if DB NULL
+```
+
+**Retrieving generated keys:**
+```java
+String sql = "INSERT INTO products (name, price) VALUES (?, ?)";
+
+try (PreparedStatement ps = conn.prepareStatement(sql,
+        Statement.RETURN_GENERATED_KEYS)) {  // flag generated keys
+
+    ps.setString(1, "Widget");
+    ps.setBigDecimal(2, new BigDecimal("9.99"));
+    ps.executeUpdate();
+
+    try (ResultSet keys = ps.getGeneratedKeys()) {
+        if (keys.next()) {
+            long newId = keys.getLong(1);
+            System.out.println("Generated ID: " + newId);
+        }
+    }
+}
+```
+
+**LIKE with parameters (safe pattern):**
+```java
+// WRONG — SQL injection risk
+String sql = "SELECT * FROM users WHERE name LIKE '%" + input + "%'";
+
+// CORRECT — parameter is the full pattern including wildcards
+String sql = "SELECT * FROM users WHERE name LIKE ?";
+ps.setString(1, "%" + input.replace("%", "\\%").replace("_", "\\_") + "%");
+// escape DB wildcards in user input to prevent unintended pattern expansion
+```
+
+**`CallableStatement` for stored procedures:**
+```java
+// IN, OUT, and INOUT parameters
+try (CallableStatement cs = conn.prepareCall("{call calculate_discount(?, ?, ?)}")) {
+    cs.setInt(1, orderId);           // IN
+    cs.setBigDecimal(2, basePrice);  // IN
+    cs.registerOutParameter(3, Types.DECIMAL); // OUT
+
+    cs.execute();
+
+    BigDecimal discount = cs.getBigDecimal(3); // read OUT param
+}
+```
+
+**Common Pitfalls:**
+- Using `Statement` with string concatenation instead of `PreparedStatement` — **SQL injection**
+- Not using `ps.clearParameters()` when re-using a PreparedStatement in a loop
+- Using `ps.setDate()` with `java.sql.Date` losing time-of-day info — prefer `ps.setTimestamp()` or `ps.setObject()` with `LocalDateTime`
+- `ps.setObject(n, localDateTime)` is JDBC 4.2+ and the cleanest approach for Java 8 time types
+
+**Java 8 Time API with JDBC 4.2+:**
+```java
+// Preferred — JDBC 4.2 supports JSR-310 via setObject/getObject
+ps.setObject(1, LocalDate.now());
+ps.setObject(2, LocalDateTime.now());
+ps.setObject(3, OffsetDateTime.now());
+
+LocalDate date       = rs.getObject("dob", LocalDate.class);
+LocalDateTime ldt    = rs.getObject("created_at", LocalDateTime.class);
+OffsetDateTime odt   = rs.getObject("updated_at", OffsetDateTime.class);
+```
+
+---
+
+### 6. ResultSet Handling
+
+**Definition:** `ResultSet` is a cursor that points to the current row in a query result. Initially positioned before the first row; you advance it with `next()`.
+
+**Core iteration pattern:**
+```java
+try (ResultSet rs = ps.executeQuery()) {
+    while (rs.next()) {
+        // Access columns by name (readable) or index (faster, 1-based)
+        int    id     = rs.getInt("id");          // by name
+        String name   = rs.getString(2);           // by index
+        double price  = rs.getDouble("price");
+        boolean active = rs.getBoolean("active");
+        Date   created = rs.getDate("created_at");
+
+        // Blob / binary
+        byte[] image   = rs.getBytes("thumbnail");
+        Blob   blob    = rs.getBlob("document");
+    }
+}
+```
+
+**ResultSetMetaData — introspecting columns:**
+```java
+ResultSetMetaData meta = rs.getMetaData();
+int colCount = meta.getColumnCount();
+
+for (int i = 1; i <= colCount; i++) {
+    System.out.printf("Col %d: name=%-20s type=%-15s nullable=%s%n",
+        i,
+        meta.getColumnName(i),
+        meta.getColumnTypeName(i),
+        meta.isNullable(i) == ResultSetMetaData.columnNullable ? "YES" : "NO"
+    );
+}
+```
+
+**Streaming large results (fetch size):**
+```java
+// Default fetch size is driver-dependent (often pulls all rows at once)
+// For large result sets, set fetch size to stream rows in chunks
+PreparedStatement ps = conn.prepareStatement(
+    "SELECT * FROM audit_log WHERE event_date > ?");
+ps.setFetchSize(500);  // fetch 500 rows per round-trip to DB
+ps.setObject(1, LocalDate.now().minusDays(30));
+
+// PostgreSQL: disable autocommit + fetchSize > 0 enables true server-side cursor
+conn.setAutoCommit(false);
+ps.setFetchSize(1000);
+
+try (ResultSet rs = ps.executeQuery()) {
+    while (rs.next()) {
+        processRow(rs);  // rows fetched lazily in batches of 1000
+    }
+}
+```
+
+**Mapping ResultSet to objects:**
+```java
+// Manual mapping helper
+record Customer(int id, String name, String email, boolean active) {}
+
+List<Customer> mapCustomers(ResultSet rs) throws SQLException {
+    var result = new ArrayList<Customer>();
+    while (rs.next()) {
+        result.add(new Customer(
+            rs.getInt("id"),
+            rs.getString("name"),
+            rs.getString("email"),
+            rs.getBoolean("active")
+        ));
+    }
+    return result;
+}
+
+// Generic RowMapper pattern (Spring-style)
+@FunctionalInterface
+interface RowMapper<T> {
+    T mapRow(ResultSet rs, int rowNum) throws SQLException;
+}
+
+<T> List<T> query(DataSource ds, String sql, RowMapper<T> mapper) throws SQLException {
+    try (var conn = ds.getConnection();
+         var stmt = conn.createStatement();
+         var rs = stmt.executeQuery(sql)) {
+        var results = new ArrayList<T>();
+        int row = 0;
+        while (rs.next()) results.add(mapper.mapRow(rs, ++row));
+        return results;
+    }
+}
+```
+
+**Common Pitfalls:**
+- Calling `rs.getInt("col")` after `rs` is closed → `SQLException`
+- Iterating a `ResultSet` while opening a second query on the **same** connection with `Statement` can close the first `ResultSet` on some drivers
+- Not setting `fetchSize` on large queries → JVM heap pressure from loading millions of rows
+- Column name string typos — prefer constants or enums for column names
+
+---
+
+### 7. Transactions
+
+**Definition:** A transaction is a unit of work that is either fully committed or fully rolled back. JDBC transactions map directly to database transactions, controlled via `Connection`.
+
+**ACID properties:**
+- **Atomicity** — all operations succeed or all are rolled back
+- **Consistency** — DB moves from one valid state to another
+- **Isolation** — concurrent transactions don't interfere
+- **Durability** — committed changes survive crashes
+
+**Basic transaction control:**
+```java
+Connection conn = ds.getConnection();
+conn.setAutoCommit(false);  // CRITICAL — disable auto-commit
+
+try {
+    // Operation 1: debit account
+    try (PreparedStatement debit = conn.prepareStatement(
+            "UPDATE accounts SET balance = balance - ? WHERE id = ?")) {
+        debit.setBigDecimal(1, amount);
+        debit.setInt(2, fromAccountId);
+        debit.executeUpdate();
+    }
+
+    // Operation 2: credit account
+    try (PreparedStatement credit = conn.prepareStatement(
+            "UPDATE accounts SET balance = balance + ? WHERE id = ?")) {
+        credit.setBigDecimal(1, amount);
+        credit.setInt(2, toAccountId);
+        credit.executeUpdate();
+    }
+
+    conn.commit();  // both succeed → persist
+    System.out.println("Transfer committed");
+
+} catch (SQLException e) {
+    try {
+        conn.rollback();  // any failure → undo both operations
+    } catch (SQLException ex) {
+        logger.error("Rollback failed", ex);
+    }
+    throw e;
+} finally {
+    conn.setAutoCommit(true);  // restore default before returning to pool
+    conn.close();
+}
+```
+
+**Savepoints — partial rollback:**
+```java
+conn.setAutoCommit(false);
+Savepoint sp = null;
+
+try {
+    executeStep1(conn);
+
+    sp = conn.setSavepoint("after_step1");  // checkpoint
+
+    executeStep2(conn);  // risky operation
+
+    conn.commit();
+
+} catch (SQLException e) {
+    if (sp != null) {
+        conn.rollback(sp);  // roll back only to savepoint, keep step1
+        conn.commit();      // commit step1 only
+    } else {
+        conn.rollback();    // full rollback
+    }
+}
+```
+
+**Isolation levels and concurrency phenomena:**
+
+| Isolation Level | Dirty Read | Non-repeatable Read | Phantom Read |
+|---|---|---|---|
+| `READ_UNCOMMITTED` | ✅ possible | ✅ possible | ✅ possible |
+| `READ_COMMITTED` | ❌ prevented | ✅ possible | ✅ possible |
+| `REPEATABLE_READ` | ❌ prevented | ❌ prevented | ✅ possible |
+| `SERIALIZABLE` | ❌ prevented | ❌ prevented | ❌ prevented |
+
+```java
+// Set before first statement in transaction
+conn.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);  // typical default
+
+// PostgreSQL default: READ COMMITTED
+// MySQL InnoDB default: REPEATABLE READ
+// SERIALIZABLE has highest consistency but lowest throughput (locks/retry)
+```
+
+**Common Pitfalls:**
+- Forgetting `conn.setAutoCommit(false)` — each statement auto-commits, no transaction semantics
+- Not rolling back in `catch` → partial writes left in DB
+- Not restoring `autoCommit` to `true` before returning connection to pool — pool re-use will have wrong autocommit state
+- Setting isolation too high (`SERIALIZABLE`) without retry logic for serialization failures
+- Long-running transactions holding locks — keep transactions as short as possible
+
+---
+
+### 8. Batch Processing
+
+**Definition:** Batch processing groups multiple SQL statements and sends them to the database in a single network round-trip, dramatically reducing network overhead and often enabling DB-side optimizations.
+
+**Key Details:**
+- Critical for bulk INSERT/UPDATE operations (ETL, data migration)
+- `addBatch()` → `executeBatch()` pattern
+- `rewriteBatchedStatements=true` (MySQL) merges into multi-row INSERT
+- Recommended batch sizes: 100–1000 rows (profile for your DB and row size)
+
+**Basic batch insert:**
+```java
+String sql = "INSERT INTO events (type, payload, created_at) VALUES (?, ?, ?)";
+
+conn.setAutoCommit(false);  // batch + transaction for atomicity + performance
+
+try (PreparedStatement ps = conn.prepareStatement(sql)) {
+
+    int batchSize = 500;
+    int count = 0;
+
+    for (Event event : events) {
+        ps.setString(1, event.type());
+        ps.setString(2, event.payload());
+        ps.setObject(3, LocalDateTime.now());
+        ps.addBatch();  // queue this set of params
+
+        if (++count % batchSize == 0) {
+            int[] results = ps.executeBatch();  // flush every 500 rows
+            conn.commit();                       // commit each chunk
+            ps.clearBatch();
+            System.out.println("Committed batch at row " + count);
+        }
+    }
+
+    // Flush remaining rows
+    if (count % batchSize != 0) {
+        ps.executeBatch();
+        conn.commit();
+    }
+
+} catch (BatchUpdateException e) {
+    conn.rollback();
+    // BatchUpdateException contains per-statement update counts up to failure
+    int[] updateCounts = e.getUpdateCounts();
+    // EXECUTE_FAILED (-3) marks the failed statement
+    for (int i = 0; i < updateCounts.length; i++) {
+        if (updateCounts[i] == Statement.EXECUTE_FAILED) {
+            System.err.println("Failed at index: " + i);
+        }
+    }
+    throw e;
+}
+```
+
+**Batch update (Statement — for heterogeneous SQL):**
+```java
+try (Statement stmt = conn.createStatement()) {
+    stmt.addBatch("UPDATE config SET value='v2' WHERE key='api.version'");
+    stmt.addBatch("DELETE FROM sessions WHERE expired_at < NOW()");
+    stmt.addBatch("INSERT INTO audit_log (action) VALUES ('maintenance')");
+
+    int[] counts = stmt.executeBatch();
+    conn.commit();
+}
+```
+
+**Reading batch results:**
+```java
+int[] updateCounts = ps.executeBatch();
+// updateCounts[i] is one of:
+//   >= 0  : rows affected for statement i
+//   SUCCESS_NO_INFO (-2) : succeeded but row count unknown (driver may batch internally)
+//   EXECUTE_FAILED  (-3) : this statement failed
+
+// getLargeUpdateCounts() for > Integer.MAX_VALUE rows
+long[] largeCounts = ps.executeLargeBatch();
+```
+
+**Performance comparison:**
+```
+Individual inserts (10,000 rows):  ~10,000 round-trips  → slow
+Batch insert (10,000 rows, b=500): ~20 round-trips      → ~100x faster
+PostgreSQL COPY / MySQL LOAD:       1 round-trip         → fastest
+```
+
+**Common Pitfalls:**
+- Not calling `conn.setAutoCommit(false)` with batches — auto-commit negates performance gains (each row committed individually at DB level)
+- Unbounded batches — adding millions of rows to a batch without flushing → heap exhaustion
+- Not handling `BatchUpdateException` — need to identify which specific row in the batch failed
+- Not clearing the batch (`ps.clearBatch()`) after `executeBatch()` — old params accumulate
+
+---
+
+### 9. Connection Pooling
+
+**Definition:** A connection pool maintains a cache of pre-established database connections that are leased to callers and returned after use, eliminating the overhead of creating a new connection on every request.
+
+**Why it matters:**
+- Creating a JDBC connection is expensive: TCP handshake, auth, server-side session (typically 20–100ms)
+- Production apps serve thousands of requests/second — connection-per-request is not feasible
+- Pool provides bounded resource management, health checking, and metrics
+
+**Connection lifecycle in a pool:**
+```
+App calls ds.getConnection()
+       │
+       ▼
+Pool has idle connection? ──YES──► lease to app
+       │ NO
+       ▼
+Pool below maxSize? ────YES──► create new connection, lease it
+       │ NO
+       ▼
+Wait up to connectionTimeout
+       │ timeout
+       ▼
+Throw SQLTimeoutException
+```
+
+**HikariCP — production standard:**
+```java
+// Maven: com.zaxxer:HikariCP:5.x
+HikariConfig config = new HikariConfig();
+
+// Core connection settings
+config.setJdbcUrl("jdbc:postgresql://localhost:5432/orders");
+config.setUsername("app_user");
+config.setPassword("secret");
+config.setDriverClassName("org.postgresql.Driver"); // optional if driver is on classpath
+
+// Pool sizing
+config.setMinimumIdle(5);           // idle connections to maintain
+config.setMaximumPoolSize(20);      // max total connections in pool
+
+// Timeout settings (milliseconds)
+config.setConnectionTimeout(30_000);     // max wait to get connection from pool
+config.setIdleTimeout(600_000);          // remove idle connections after 10 min
+config.setMaxLifetime(1_800_000);        // recycle connections after 30 min (< DB timeout)
+config.setKeepaliveTime(60_000);         // send keepalive to prevent firewall idle timeout
+
+// Connection validation
+config.setConnectionTestQuery("SELECT 1");    // or use isValid() (preferred)
+config.setValidationTimeout(5_000);
+
+// Performance tuning
+config.addDataSourceProperty("cachePrepStmts", "true");     // PostgreSQL/MySQL
+config.addDataSourceProperty("prepStmtCacheSize", "250");
+config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+config.addDataSourceProperty("rewriteBatchedStatements", "true"); // MySQL: batch INSERT merge
+
+// Pool name for metrics/logging
+config.setPoolName("orders-pool");
+
+HikariDataSource ds = new HikariDataSource(config);
+
+// Usage — same as any DataSource
+try (Connection conn = ds.getConnection()) {
+    // use conn — automatically returned to pool on close()
+}
+
+// Shutdown cleanly on app exit
+ds.close();
+```
+
+**Spring Boot auto-configuration:**
+```yaml
+# application.yml — HikariCP is Spring Boot's default pool
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/orders
+    username: app_user
+    password: secret
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      pool-name: orders-pool
+      connection-test-query: SELECT 1
+```
+
+**Pool sizing guidelines:**
+```
+Hikari formula:  pool_size = (core_count * 2) + effective_spindle_count
+                 For SSD: effective_spindle_count ≈ 1
+                 8-core server → pool_size ≈ 17 connections
+
+PostgreSQL rule: max_connections = 100 (default)
+                 Leave headroom for admin/monitoring connections
+                 Production: typically 10–50 app connections per service instance
+
+Rule: More connections ≠ better throughput
+      Connections compete for DB CPU → contention past optimal pool size
+```
+
+**Detecting and debugging connection leaks:**
+```java
+// HikariCP leak detection
+config.setLeakDetectionThreshold(10_000); // warn if connection held > 10s
+// Logs: "Connection leak detection triggered for ..."
+
+// At WARN level, stack trace shows which code obtained the leaked connection
+```
+
+**Pool monitoring (Micrometer / JMX):**
+```java
+// HikariCP exposes metrics via MeterRegistry (Micrometer)
+config.setMetricRegistry(meterRegistry); // auto-exports to Prometheus/Datadog
+
+// Key metrics to monitor:
+// hikaricp.connections.active      — currently in use
+// hikaricp.connections.idle        — available in pool
+// hikaricp.connections.pending     — threads waiting for a connection
+// hikaricp.connections.timeout.total — requests that timed out
+// hikaricp.connections.acquire     — acquisition latency histogram
+```
+
+**Multiple pools for read/write splitting:**
+```java
+// Primary pool — read/write
+HikariConfig primaryConfig = new HikariConfig();
+primaryConfig.setJdbcUrl("jdbc:postgresql://primary:5432/db");
+primaryConfig.setMaximumPoolSize(20);
+DataSource primaryDs = new HikariDataSource(primaryConfig);
+
+// Replica pool — read-only queries
+HikariConfig replicaConfig = new HikariConfig();
+replicaConfig.setJdbcUrl("jdbc:postgresql://replica:5432/db");
+replicaConfig.setReadOnly(true);
+replicaConfig.setMaximumPoolSize(40); // larger — reads dominate
+DataSource replicaDs = new HikariDataSource(replicaConfig);
+
+// Route based on operation type
+DataSource getDataSource(boolean readOnly) {
+    return readOnly ? replicaDs : primaryDs;
+}
+```
+
+**Common Pitfalls:**
+- Pool size too large → DB-side contention, context switching overhead
+- Pool size too small → threads pile up waiting → request timeouts
+- `maxLifetime` > DB `wait_timeout` (MySQL) or `tcp_keepalives_idle` → pool holds stale connections that DB already closed → `Connection is closed` errors
+- Not closing `Connection` (forgetting try-with-resources) → pool exhaustion
+- Running integration tests with production pool settings → tests starve each other
+
+---
+
+## Interview Questions — 15 Deep-Dive Q&As
+
+---
+
+**Q1. What is the difference between `Statement`, `PreparedStatement`, and `CallableStatement`?**
+
+> `Statement` sends raw SQL to the DB each time — no parameterization, vulnerable to SQL injection, SQL re-parsed every execution. `PreparedStatement` pre-compiles SQL with `?` placeholders; parameters are bound separately — prevents SQL injection, enables execution plan reuse, type-safe. `CallableStatement` extends `PreparedStatement` for stored procedures and functions, supporting `IN`, `OUT`, and `INOUT` parameters registered via `registerOutParameter()`. In practice: always use `PreparedStatement` for parameterized queries, `CallableStatement` for procs, and reserve `Statement` only for DDL or truly static SQL.
+
+---
+
+**Q2. What is SQL injection and how does JDBC prevent it?**
+
+> SQL injection occurs when user-supplied input is concatenated into SQL strings, allowing attackers to alter query structure (e.g., `' OR '1'='1`). JDBC `PreparedStatement` prevents it because parameters are always transmitted as data to the DB, never interpreted as SQL — the SQL structure is fixed at `prepareStatement()` time. The driver sends the query and parameters via separate protocol messages; the database never sees the parameter values as SQL tokens. You must also escape wildcards (`%`, `_`) in LIKE parameters manually to prevent unintended pattern expansion.
+
+---
+
+**Q3. Explain JDBC transaction isolation levels and the phenomena they prevent.**
+
+> JDBC maps to four SQL standard isolation levels set via `conn.setTransactionIsolation()`. `READ_UNCOMMITTED` allows dirty reads (reading uncommitted data from other transactions). `READ_COMMITTED` (PostgreSQL default) prevents dirty reads but allows non-repeatable reads (re-reading a row sees updated values from committed transactions). `REPEATABLE_READ` (MySQL InnoDB default) also prevents non-repeatable reads but allows phantom reads (re-executing a range query may return new rows). `SERIALIZABLE` prevents all three phenomena but has the highest overhead — DB uses range locks or optimistic conflict detection, often requiring retry on serialization failure. Senior answer: choose the minimum isolation that satisfies your consistency requirement; `READ_COMMITTED` is right for most OLTP; `SERIALIZABLE` requires retry logic.
+
+---
+
+**Q4. What is a connection pool and how does HikariCP work internally?**
+
+> A connection pool pre-creates and maintains a set of open DB connections that are leased to callers and returned on `close()`. HikariCP is the fastest JVM pool — it uses a custom `ConcurrentBag` (lock-free data structure combining `CopyOnWriteArrayList` and thread-local caching) to minimize contention when lending connections. Each connection is wrapped in a `ProxyConnection` that intercepts `close()` to return to pool instead of truly closing. HikariCP validates connections using `isValid()` (preferred) or a test query, and enforces `maxLifetime` to recycle aging connections before the database terminates them. Key config: `maximumPoolSize` (ceiling), `maxLifetime` (must be less than DB timeout), `connectionTimeout` (wait-to-acquire), `leakDetectionThreshold` (debugging).
+
+---
+
+**Q5. Why must `maxLifetime` be set less than the database's connection timeout?**
+
+> Databases and network infrastructure (firewalls, load balancers) close idle TCP connections after a timeout (`wait_timeout` in MySQL, firewall idle rules). If the pool's `maxLifetime` is longer than that external timeout, the pool will try to lend a connection that the DB has already closed, resulting in `"Communications link failure"` or `"Connection is closed"` errors for the first request that uses it. Setting `maxLifetime` a few minutes shorter than the DB timeout ensures HikariCP retires and replaces connections before they go stale. `keepaliveTime` can also send lightweight heartbeats to prevent idle timeout on quiet pools.
+
+---
+
+**Q6. What is `BatchUpdateException` and how do you handle partial batch failures?**
+
+> `BatchUpdateException` is thrown by `executeBatch()` when one or more statements in the batch fail. It extends `SQLException` and carries an `int[] getUpdateCounts()` array where each element is the affected row count for that statement, `Statement.SUCCESS_NO_INFO (-2)` for succeeded-but-unknown, or `Statement.EXECUTE_FAILED (-3)` for failed statements. Driver behavior varies: some drivers stop at the first failure; others (e.g., PostgreSQL with `CONTINUE_BATCH`) attempt all and report all failures. Handling strategy: catch `BatchUpdateException`, inspect the array to identify failed indices, log or quarantine those records, and decide whether to retry or report. Always wrap batch operations in a transaction for atomicity.
+
+---
+
+**Q7. How does `setFetchSize` improve performance for large queries?**
+
+> By default, many drivers (e.g., MySQL) fetch the entire result set into client memory before returning the `ResultSet`. For millions of rows, this causes heap pressure. `setFetchSize(n)` instructs the driver to retrieve rows in chunks of `n` per round-trip (a server-side cursor). In PostgreSQL, this additionally requires `autoCommit=false` to activate a true server-side cursor — otherwise the hint is ignored. In MySQL, the special value `Integer.MIN_VALUE` enables row-by-row streaming. The result: constant memory usage regardless of result set size, at the cost of more DB round-trips.
+
+---
+
+**Q8. What is `autoCommit` and what are the risks of not managing it?**
+
+> By default, JDBC connections have `autoCommit=true`, meaning every statement is immediately committed as its own transaction. This is appropriate for single-statement operations but disastrous for multi-statement transactions — if step 2 fails after step 1 committed, you have a partial write. Set `autoCommit=false` before starting a transaction and explicitly `commit()` or `rollback()`. Critical pool consideration: always restore `autoCommit=true` (or whatever the pool expects) before returning the connection to the pool. Failing to do so means the next borrower gets a connection in a mid-transaction state, which can cause data corruption or unexpected rollbacks.
+
+---
+
+**Q9. How do you handle `NULL` values correctly in JDBC?**
+
+> For setting NULLs: use `ps.setNull(index, Types.VARCHAR)` (specifying the SQL type). For reading NULLs: `getString()`, `getObject()` return Java `null` directly. For primitive-returning methods (`getInt()`, `getDouble()`, etc.), they return `0`/`false` when the column is NULL — you **must** call `rs.wasNull()` immediately after to check if the last column read was actually NULL. Alternatively, use `rs.getObject("col", Integer.class)` to get a boxed type that returns `null` cleanly. Numeric NULL mishandling is a common source of silent data bugs.
+
+---
+
+**Q10. What is the difference between optimistic and pessimistic locking in JDBC?**
+
+> **Pessimistic locking** locks rows at query time using `SELECT ... FOR UPDATE`, preventing other transactions from modifying the locked rows until the lock is released at commit/rollback. Use when contention is high and conflicts are expected. In JDBC: `ps.executeQuery("SELECT * FROM inventory WHERE id = ? FOR UPDATE")`. **Optimistic locking** doesn't lock — it reads a version/timestamp column, performs updates, and checks the version in the `WHERE` clause: `UPDATE products SET stock = ?, version = version+1 WHERE id = ? AND version = ?`. If `executeUpdate()` returns 0, another transaction modified the row — throw a concurrency exception and retry. Optimistic locking is preferred for low-contention scenarios and scales better.
+
+---
+
+**Q11. What is a `Savepoint` and when would you use one?**
+
+> A `Savepoint` marks a point within a transaction to which you can partially roll back without abandoning the entire transaction. Set with `conn.setSavepoint("name")`, roll back to it with `conn.rollback(savepoint)`, and optionally `conn.releaseSavepoint(savepoint)` when no longer needed. Use case: a multi-step transaction where some steps are optional or best-effort — if a non-critical step fails, roll back only that step and commit the critical work. Example: importing a batch of records where individual record failures shouldn't abort the whole import — use a savepoint per record, roll back per-record on failure, commit successfully processed ones.
+
+---
+
+**Q12. How would you implement read/write splitting with JDBC connection pools?**
+
+> Maintain two `DataSource` instances — one pointing to the primary (read-write) and one to a replica (read-only). Route based on operation intent: DML and transactions go to primary, `SELECT`-only operations go to replica. In Spring, this is done with `AbstractRoutingDataSource` — override `determineCurrentLookupKey()` to return a key based on a `ThreadLocal` flag set by a `@Transactional(readOnly=true)` interceptor. The replica pool can be larger (reads dominate most workloads) and use `setReadOnly(true)` on connections. Replica lag must be accounted for — reads that immediately follow writes should go to primary or use session consistency.
+
+---
+
+**Q13. What is the N+1 query problem and how does JDBC help avoid it?**
+
+> N+1 occurs when fetching N parent records generates N additional queries for child records (e.g., fetch 100 orders, then fetch items for each order individually = 101 queries). In raw JDBC, you avoid it by using a JOIN query that retrieves parent and child in one result set and reconstructing the object graph during `ResultSet` iteration, or by using an `IN` clause batch lookup (`WHERE order_id IN (?, ?, ...)`). This is also why ORM lazy loading (which defaults to N+1) is a performance trap. Senior answer: always analyze query patterns against batch/join alternatives; use `setFetchSize` + single JOIN for hierarchical data.
+
+---
+
+**Q14. How do you properly close JDBC resources and what happens if you don't?**
+
+> Close in reverse acquisition order: `ResultSet` → `Statement` → `Connection`. Use try-with-resources, which implements `AutoCloseable`, to guarantee closure even on exceptions. Failure to close a `ResultSet` or `Statement` leaks server-side cursors and memory on the DB. Failure to close a `Connection` (or return it to the pool) exhausts the pool — new requests block and eventually timeout. In production, combine HikariCP's `leakDetectionThreshold` with monitoring of `hikaricp.connections.pending` and `active` metrics. A sustained rise in `active` connections approaching `maximumPoolSize` without corresponding throughput increase is a leak signature.
+
+---
+
+**Q15. How would you design a lightweight JDBC abstraction layer for a team to use safely?**
+
+```java
+// Thread-safe, resource-safe, eliminates boilerplate
+public class JdbcTemplate {
+    private final DataSource ds;
+
+    public JdbcTemplate(DataSource ds) { this.ds = ds; }
+
+    // Query returning list
+    public <T> List<T> query(String sql, RowMapper<T> mapper, Object... params)
+            throws SQLException {
+        try (var conn = ds.getConnection();
+             var ps = prepareStatement(conn, sql, params);
+             var rs = ps.executeQuery()) {
+            var results = new ArrayList<T>();
+            int row = 0;
+            while (rs.next()) results.add(mapper.mapRow(rs, ++row));
+            return results;
+        }
+    }
+
+    // Update (INSERT/UPDATE/DELETE)
+    public int update(String sql, Object... params) throws SQLException {
+        try (var conn = ds.getConnection();
+             var ps = prepareStatement(conn, sql, params)) {
+            return ps.executeUpdate();
+        }
+    }
+
+    // Transaction support
+    public <T> T inTransaction(TransactionCallback<T> callback) throws SQLException {
+        try (var conn = ds.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                T result = callback.execute(conn);
+                conn.commit();
+                return result;
+            } catch (Exception e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        }
+    }
+
+    private PreparedStatement prepareStatement(Connection conn, String sql, Object[] params)
+            throws SQLException {
+        var ps = conn.prepareStatement(sql);
+        for (int i = 0; i < params.length; i++) ps.setObject(i + 1, params[i]);
+        return ps;
+    }
+}
+
+@FunctionalInterface
+interface TransactionCallback<T> {
+    T execute(Connection conn) throws SQLException;
+}
+```
+
+> Senior answer: this is essentially what Spring's `JdbcTemplate` does — wrap JDBC resource management, parameter binding, and exception translation so callers write only mapping logic. Key design decisions: use `setObject()` for universal parameter binding (JDBC 4.2 handles all JSR-310 types), catch `SQLException` and translate to unchecked exceptions at the boundary, expose `RowMapper` as a functional interface for lambda-friendly usage.
+
+---
+
+## Advanced / Senior-Level Considerations
+
+### Performance
+- **Connection creation cost**: ~20–100ms per connection (auth, SSL, session init) — pool is non-negotiable in production
+- **PreparedStatement plan caching**: DB parses once, caches execution plan; set `cachePrepStmts=true` in HikariCP driver properties
+- **Batch vs. individual**: single-row inserts in a loop are 10–100x slower than batched; use `executeBatch()` with chunked commits
+- **fetchSize**: default pulls entire result into heap; always set for result sets > a few thousand rows
+- **Read-only connections**: `conn.setReadOnly(true)` can skip redo-log writes on some DBs
+
+### Distributed Transactions (XA)
+```
+XADataSource → XAConnection → XAResource
+      ↕ coordinated by
+TransactionManager (Atomikos, Bitronix, Narayana)
+      ↕
+2PC: prepare() → commit() / rollback()
+```
+- Two-phase commit across multiple resources (DB + MQ)
+- High overhead: locks held across prepare phase
+- Modern alternative: Saga pattern with compensating transactions + outbox pattern
+
+### Connection Pooling at Scale
+```
+Microservice architecture pattern:
+  Service A (20 instances × 20 pool size = 400 connections)
+  Service B (10 instances × 20 pool size = 200 connections)
+  PostgreSQL max_connections = 100 → EXHAUSTED
+
+Solution: PgBouncer (connection proxy/multiplexer)
+  Services connect to PgBouncer → PgBouncer maintains 50 connections to PostgreSQL
+  Transaction-mode pooling: connection released after each transaction
+  Session-mode pooling: connection held for full session (worst for pooling)
+```
+
+### JDBC + ORM Interplay
+- JPA/Hibernate translates entity operations to JDBC calls — understanding JDBC helps diagnose:
+  - N+1 (use `JOIN FETCH` or batch fetch)
+  - Missing `executeBatch` despite `@BatchSize` (check `hibernate.jdbc.batch_size`)
+  - Transaction boundaries (`@Transactional` maps to `setAutoCommit(false)` + `commit`)
+  - Second-level cache bypassing JDBC entirely vs. DB constraint violations
+
+### Resilience Patterns
+```java
+// Retry with exponential backoff for transient DB errors
+int attempt = 0;
+while (attempt++ < MAX_RETRIES) {
+    try {
+        return executeWithJdbc();
+    } catch (SQLException e) {
+        if (!isTransient(e) || attempt == MAX_RETRIES) throw e;
+        Thread.sleep((long) Math.pow(2, attempt) * 100); // 200, 400, 800ms
+    }
+}
+
+// Transient error codes (PostgreSQL):
+// 40001 = serialization_failure (retry immediately)
+// 40P01 = deadlock_detected (retry)
+// 53300 = too_many_connections (backoff + alert)
+boolean isTransient(SQLException e) {
+    return Set.of("40001","40P01","53300").contains(e.getSQLState());
+}
+```
+
+---
+
+## Summary / Cheat Sheet
+
+```
+JDBC CORE FLOW
+  DriverManager / DataSource
+    → Connection (session, AutoCloseable)
+        → PreparedStatement (SQL + params, AutoCloseable)
+            → ResultSet (cursor, AutoCloseable)
+
+ALWAYS
+  ✅ try-with-resources for Connection, Statement, ResultSet
+  ✅ PreparedStatement for ANY parameterized SQL
+  ✅ setAutoCommit(false) before multi-statement transactions
+  ✅ rollback() in catch, commit() in try
+  ✅ restore autoCommit(true) before returning to pool
+  ✅ setFetchSize() for large result sets
+  ✅ executeBatch() + chunked commits for bulk writes
+  ✅ HikariCP DataSource — not DriverManager — in production
+
+NEVER
+  ❌ String concatenation for SQL parameters → SQL injection
+  ❌ DriverManager in production → no pooling
+  ❌ Unclosed connections → pool exhaustion
+  ❌ maxLifetime > DB connection timeout → stale connection errors
+  ❌ Unbounded batches → heap exhaustion
+  ❌ Sharing Connection across threads → not thread-safe
+
+NULL HANDLING
+  Writing:  ps.setNull(i, Types.VARCHAR)
+  Reading:  rs.getString() → null directly
+            rs.getInt()    → 0 if NULL; check rs.wasNull() after
+            rs.getObject("col", Integer.class) → null safely
+
+ISOLATION LEVELS (ascending strictness / cost)
+  READ_UNCOMMITTED → READ_COMMITTED → REPEATABLE_READ → SERIALIZABLE
+
+BATCH PATTERN
+  setAutoCommit(false)
+  loop { addBatch(); if count%chunkSize==0: executeBatch(); commit(); }
+  executeBatch(); commit()  ← flush remainder
+
+POOL KEY SETTINGS (HikariCP)
+  maximumPoolSize   = (cores × 2) + 1  (adjust by profiling)
+  maxLifetime       < DB wait_timeout by 2–3 minutes
+  connectionTimeout = 30s (time to wait for pool slot)
+  leakDetection     = 10s (debug)
+
+TRANSACTION CHECKLIST
+  setAutoCommit(false)
+  → execute statements
+  → commit()  OR  rollback() in catch
+  → setAutoCommit(true) in finally before pool return
+```
+
+# Performance & Optimization — Senior Developer Study Notes
+
+---
+
+## 1. Topic Overview
+
+**Definition:** JVM performance optimization encompasses tuning memory, garbage collection, threading, I/O, and CPU usage to meet non-functional requirements (latency, throughput, availability).
+
+**Why it matters:**
+- Poorly tuned JVM apps suffer GC pauses, OOM errors, thread starvation, and I/O bottlenecks
+- Senior engineers own NFRs: p99 latency, throughput SLAs, cost efficiency
+- Cloud-native billing is compute/memory-sensitive — inefficiency is expensive
+
+**Real-world scenarios:**
+- Trading systems: sub-millisecond GC pause budgets → ZGC/Shenandoah
+- High-throughput APIs: throughput tuning, thread pool sizing, connection pooling
+- Batch pipelines: heap sizing, G1 region tuning, parallel GC
+- Microservices: container-aware JVM flags, off-heap memory management
+
+---
+
+## 2. Core Concepts — Mental Model
+
+```
+JVM Memory Architecture
+┌─────────────────────────────────────────────────────┐
+│                    JVM Process                       │
+│  ┌──────────────┐  ┌──────────────────────────────┐ │
+│  │  Stack       │  │          Heap                │ │
+│  │ (per thread) │  │  ┌────────────┬───────────┐  │ │
+│  │  - frames    │  │  │   Young    │    Old     │  │ │
+│  │  - locals    │  │  │ ┌──┬──┬──┐ │   Gen      │  │ │
+│  │  - operands  │  │  │ │E0│E1│S │ │            │  │ │
+│  └──────────────┘  │  └────────────┴───────────┘  │ │
+│                    └──────────────────────────────┘ │
+│  ┌──────────────┐  ┌──────────────┐                 │
+│  │  Metaspace   │  │  Off-Heap /  │                 │
+│  │ (class meta) │  │  Direct Buf  │                 │
+│  └──────────────┘  └──────────────┘                 │
+└─────────────────────────────────────────────────────┘
+```
+
+**Key principles:**
+- **Stop-The-World (STW):** All threads pause during certain GC phases — minimize frequency and duration
+- **Throughput vs Latency:** Fundamentally in tension; tuning one often hurts the other
+- **Profiling before optimizing:** Never guess — measure with real load
+- **Mechanical sympathy:** Write code that respects CPU cache lines, memory hierarchy, and OS scheduling
+
+---
+
+## 3. Subtopics Breakdown
+
+---
+
+### 3.1 Heap vs Stack Memory
+
+**Heap:**
+- Stores objects, arrays — shared across threads
+- Managed by GC; subject to GC pauses
+- Partitioned: Young (Eden + 2 Survivors) + Old Gen + Metaspace (Java 8+)
+- Objects survive Eden → Survivor → Old Gen (tenuring)
+
+**Stack:**
+- Per-thread; stores stack frames (method calls), local primitives, object references
+- LIFO; automatically reclaimed when method returns — zero GC cost
+- Default size: 512KB–1MB per thread; `-Xss` controls it
+- StackOverflowError = too deep recursion
+
+**Key details:**
+- Large stacks × many threads = significant native memory
+- Primitives on stack: zero allocation overhead
+- Object references on stack; objects themselves on heap (usually — see escape analysis)
+- **Metaspace** (replaces PermGen): class metadata, interned strings; grows dynamically; `-XX:MaxMetaspaceSize`
+
+```java
+// Stack allocation — primitive, zero heap pressure
+public int add(int a, int b) {
+    int result = a + b; // stays on stack frame
+    return result;
+}
+
+// Heap allocation
+public String format(int val) {
+    return new String("Value: " + val); // String object on heap
+}
+```
+
+**Common pitfalls:**
+- Forgetting Metaspace leaks with class loader leaks (OSGi, hot-deploy frameworks)
+- Assuming `String.intern()` is free — it pressures Metaspace
+- Thread-local storage leaks when threads are pooled (ThreadLocal not removed)
+
+---
+
+### 3.2 Garbage Collection — Fundamentals
+
+**GC Roots:** Thread stacks, static fields, JNI references — live objects traced from here.
+
+**Generational hypothesis:** Most objects die young → collect young gen frequently (cheap), old gen rarely (expensive).
+
+**GC phases (common):**
+1. **Mark** — identify live objects from GC roots
+2. **Sweep/Compact** — reclaim dead objects; compact to reduce fragmentation
+3. **Evacuate** — copy live objects to new region (G1, ZGC, Shenandoah)
+
+**Key metrics:**
+- **Allocation rate:** MB/s of new object creation
+- **Live set size:** Amount of data that survives a full GC
+- **Pause time:** STW duration; target p99
+- **GC overhead:** % of CPU time spent in GC (>5% is a warning; >10% is critical)
+
+---
+
+### 3.3 GC Algorithms
+
+#### Serial GC (`-XX:+UseSerialGC`)
+- Single-threaded mark-sweep-compact
+- For: single-core, small heaps, CLI tools
+- Never use in production servers
+
+#### Parallel GC (`-XX:+UseParallelGC`) — Default pre-Java 9
+- Multi-threaded young + old gen collection
+- **Throughput-oriented** — maximizes work done between pauses
+- Pauses can be long (seconds on large heaps)
+- Use: batch jobs, offline processing
+
+#### G1GC (`-XX:+UseG1GC`) — Default Java 9+
+```
+Heap split into equal-sized regions (~1–32MB)
+┌──┬──┬──┬──┬──┬──┬──┬──┐
+│E │E │S │O │O │H │E │O │   E=Eden, S=Survivor,
+└──┴──┴──┴──┴──┴──┴──┴──┘   O=Old, H=Humongous
+```
+- Regions assigned dynamically — no fixed gen boundaries
+- Concurrent marking + incremental evacuation
+- **Pause target:** `-XX:MaxGCPauseMillis=200` (soft goal)
+- Humongous objects (>50% region size) go directly to Old — avoid them
+- Mixed collections reclaim Old Gen incrementally
+
+**G1 tuning levers:**
+```bash
+-XX:+UseG1GC
+-XX:MaxGCPauseMillis=100        # Pause target (not guaranteed)
+-XX:G1HeapRegionSize=16m        # Region size (1–32MB, power of 2)
+-XX:G1NewSizePercent=20         # Min young gen %
+-XX:G1MaxNewSizePercent=40      # Max young gen %
+-XX:G1MixedGCCountTarget=8      # Mixed GC cycles to drain old gen
+-XX:InitiatingHeapOccupancyPercent=45  # When to start concurrent marking
+```
+
+#### ZGC (`-XX:+UseZGC`) — Java 15+ production-ready
+- **Concurrent** mark, relocate, remap — nearly all work done concurrently
+- STW pauses: **sub-millisecond** (typically <1ms regardless of heap size)
+- Colored pointers + load barriers to track object references during relocation
+- Scales to **terabyte heaps**
+- Trade-off: higher CPU overhead (concurrent work), higher memory overhead (~20%)
+
+```bash
+-XX:+UseZGC
+-Xms4g -Xmx4g          # Fix heap to avoid resizing pauses
+-XX:ConcGCThreads=4     # Concurrent GC thread count
+-XX:+ZGenerational      # Java 21+: generational ZGC (lower CPU overhead)
+```
+
+#### Shenandoah (`-XX:+UseShenandoahGC`) — RedHat, OpenJDK
+- Concurrent compaction (unlike G1 which evacuates young concurrently but compacts old STW)
+- **Brooks forwarding pointers** — extra word per object for indirection during relocation
+- Sub-10ms pauses; consistent regardless of heap size
+- Trade-off: higher memory overhead, moderate CPU overhead
+
+```bash
+-XX:+UseShenandoahGC
+-XX:ShenandoahGCHeuristics=adaptive   # adaptive|static|compact|aggressive
+```
+
+**GC Comparison Table:**
+```
+GC          | Pause Target    | Throughput | Heap Size   | CPU Overhead
+------------|-----------------|------------|-------------|-------------
+Serial      | High (STW)      | Low        | <100MB      | Low
+Parallel    | Medium (STW)    | Highest    | Any         | Low
+G1          | ~50–200ms       | High       | 4GB–32GB    | Medium
+ZGC         | <1ms            | High       | Any (TB)    | Medium-High
+Shenandoah  | <10ms           | High       | Any         | Medium-High
+```
+
+---
+
+### 3.4 JIT Compilation & Escape Analysis
+
+**JIT Tiers (HotSpot C1/C2):**
+```
+Interpreted → C1 (fast compile, basic opt) → C2 (slow compile, aggressive opt)
+              Tier 1-3                        Tier 4
+```
+
+- Methods compiled after **~10,000 invocations** (CompileThreshold)
+- C2 performs: inlining, loop unrolling, vectorization, escape analysis
+- `-XX:+PrintCompilation` — log JIT compilations
+- `-XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining` — log inlining decisions
+
+**Escape Analysis:**
+Objects that don't "escape" the method/thread can be:
+1. **Stack allocated** — never reaches heap, zero GC pressure
+2. **Scalar replaced** — object decomposed into primitive fields on stack
+3. **Lock elided** — synchronized on non-escaping object → lock removed
+
+```java
+// Escape analysis candidate — Point may be stack allocated
+public double distance(double x1, double y1, double x2, double y2) {
+    Point p = new Point(x2 - x1, y2 - y1); // doesn't escape
+    return Math.sqrt(p.x * p.x + p.y * p.y);
+}
+
+// Escapes — JIT cannot stack-allocate
+public Point createPoint(double x, double y) {
+    return new Point(x, y); // returned → escapes
+}
+```
+
+**Defeating escape analysis (avoid):**
+- Passing object to another method that JIT can't inline
+- Storing in fields, collections, or returning
+- Reflection on the object
+
+**JIT tips for senior engineers:**
+- Keep hot methods small enough to inline (<~35 bytecodes by default)
+- `-XX:MaxInlineSize=35` `-XX:FreqInlineSize=325`
+- Polymorphic call sites (>2 implementations) inhibit inlining — use interfaces judiciously in hot paths
+- Warm-up matters: benchmarks must account for JIT compilation time
+
+---
+
+### 3.5 Allocation Optimization
+
+**Problem:** High allocation rate → frequent minor GCs → GC overhead.
+
+**Strategies:**
+
+**1. Object reuse / pooling:**
+```java
+// Apache Commons Pool2 example
+GenericObjectPool<Connection> pool = new GenericObjectPool<>(factory);
+pool.setMaxTotal(100);
+pool.setMinIdle(10);
+pool.setMaxWaitMillis(1000);
+
+Connection conn = pool.borrowObject();
+try {
+    // use conn
+} finally {
+    pool.returnObject(conn);
+}
+```
+
+**2. StringBuilder over String concatenation in loops:**
+```java
+// BAD — creates N intermediate String objects
+String result = "";
+for (String s : list) result += s;
+
+// GOOD — single buffer
+StringBuilder sb = new StringBuilder(list.size() * 16);
+for (String s : list) sb.append(s);
+String result = sb.toString();
+```
+
+**3. Primitive collections (avoid boxing):**
+```java
+// BAD — Integer boxing, every element on heap
+Map<Integer, Integer> map = new HashMap<>();
+
+// GOOD — Eclipse Collections / Agrona / Koloboke
+IntIntHashMap map = new IntIntHashMap();  // Eclipse Collections
+```
+
+**4. Off-heap / direct buffers:**
+```java
+// Direct ByteBuffer — off-heap, not GC'd (until Cleaner runs)
+ByteBuffer direct = ByteBuffer.allocateDirect(1024 * 1024);
+
+// Managed by GC (heap)
+ByteBuffer heap = ByteBuffer.allocate(1024 * 1024);
+```
+
+**5. Value types (Java 16+ records, Project Valhalla preview):**
+```java
+// Record — compact, immutable; JIT can optimize layout
+record Point(double x, double y) {}
+```
+
+**Object pooling trade-offs:**
+| Pros | Cons |
+|------|------|
+| Reduces GC pressure | Complex lifecycle management |
+| Predictable latency | Thread contention on pool |
+| Warm objects (cache hot) | Risk of stale/dirty state bugs |
+| | Memory held even when idle |
+
+**When NOT to pool:** Modern GC (especially generational) handles short-lived objects cheaply. Pool only when: objects are expensive to create (DB connections, threads), or allocation rate measurably causes GC pauses.
+
+---
+
+### 3.6 Thread Performance & Lock Contention
+
+**Lock taxonomy:**
+```
+Biased Lock → Lightweight (CAS spin) → Heavyweight (OS mutex)
+  (single     (2 threads competing)    (kernel syscall, expensive)
+   thread)
+```
+
+**Contention sources:**
+- `synchronized` blocks under high concurrency
+- `ReentrantLock` with large critical sections
+- `Collections.synchronizedXxx` wrappers
+- `System.out.println` (internally synchronized)
+
+**Lock-free / reduced contention patterns:**
+
+```java
+// Atomic operations — CAS-based, no lock
+AtomicLong counter = new AtomicLong(0);
+counter.incrementAndGet();
+
+// LongAdder — better throughput than AtomicLong under contention
+// Stripes counter across cells, merges on read
+LongAdder adder = new LongAdder();
+adder.increment();
+long total = adder.sum(); // approximate, merged
+
+// ConcurrentHashMap — segment/bin-level locking
+ConcurrentHashMap<String, Integer> map = new ConcurrentHashMap<>();
+map.compute("key", (k, v) -> v == null ? 1 : v + 1); // atomic
+
+// Read-write lock — concurrent reads, exclusive write
+ReadWriteLock rwLock = new ReentrantReadWriteLock();
+rwLock.readLock().lock();
+try { /* read */ } finally { rwLock.readLock().unlock(); }
+```
+
+**False sharing:**
+```
+Cache line = 64 bytes
+Thread 1 writes field A │ Thread 2 writes field B
+Both fields on same cache line → cache invalidation ping-pong
+
+┌────────────────────────────────┐
+│ A (8 bytes) │ B (8 bytes) │...│  ← 64-byte cache line
+└────────────────────────────────┘
+  CPU1 writes A         CPU2 writes B
+  → invalidates entire line on both CPUs → severe slowdown
+```
+
+```java
+// BEFORE — false sharing: head and tail share a cache line
+class Queue {
+    volatile long head;
+    volatile long tail;
+}
+
+// AFTER — pad to separate cache lines (Java 8+)
+@jdk.internal.vm.annotation.Contended  // JVM annotation
+class Queue {
+    volatile long head;
+    volatile long tail;
+}
+// Or manual padding:
+class PaddedLong {
+    volatile long value;
+    long p1, p2, p3, p4, p5, p6, p7; // 7×8 = 56 bytes padding
+}
+// Enable: -XX:-RestrictContended
+```
+
+**Thread pool tuning:**
+```java
+// CPU-bound: threads = CPU cores
+int cpuBound = Runtime.getRuntime().availableProcessors();
+
+// I/O-bound: threads = cores × (1 + wait_time/compute_time)
+// e.g., 8 cores, 90% wait → 8 × (1 + 9) = 80 threads
+int ioBound = cpuBound * (1 + 9);
+
+ThreadPoolExecutor executor = new ThreadPoolExecutor(
+    corePoolSize,         // idle threads kept alive
+    maximumPoolSize,      // max threads
+    60L, TimeUnit.SECONDS,
+    new LinkedBlockingQueue<>(1000),    // bounded queue — backpressure
+    new ThreadFactory() { /* name threads */ },
+    new ThreadPoolExecutor.CallerRunsPolicy()  // backpressure policy
+);
+
+// Virtual threads (Java 21) — for I/O-bound, massive concurrency
+ExecutorService vExecutor = Executors.newVirtualThreadPerTaskExecutor();
+// No need to pool virtual threads — cheap to create (~1KB vs 1MB stack)
+```
+
+**Common pitfalls:**
+- Unbounded queues → OOM under load
+- CallerRunsPolicy on event loop thread → deadlock
+- Using `ForkJoinPool` for blocking I/O → starves worker threads
+- `ThreadLocal` in pooled threads → stale data
+
+---
+
+### 3.7 CPU Profiling & Optimization
+
+**Profiling tools:**
+- **async-profiler** — low-overhead, async-signal-safe, no safepoint bias; generates flame graphs
+- **JFR (Java Flight Recorder)** — built-in, production-safe, <1% overhead
+- **YourKit / JProfiler** — commercial, rich UI
+- **perf + jmaps** — OS-level CPU profiling
+
+```bash
+# async-profiler: CPU flame graph, 30s, attach to PID 1234
+./profiler.sh -d 30 -f flame.html 1234
+
+# JFR: record 60s
+java -XX:+FlightRecorder \
+     -XX:StartFlightRecording=duration=60s,filename=rec.jfr \
+     -XX:FlightRecorderOptions=stackdepth=128 \
+     MyApp
+# Analyze with: jmc rec.jfr
+```
+
+**Safepoint bias problem:**
+Traditional profilers only sample at safepoints (JVM checkpoints) → misses time spent in tight loops. **async-profiler uses signals** — samples wherever thread is executing → accurate.
+
+**CPU optimization techniques:**
+1. **Reduce allocations** → less GC CPU
+2. **Improve cache locality** — access arrays sequentially, not randomly
+3. **Loop hoisting** — move invariant computations out of loops
+4. **SIMD / vectorization** — write loops JIT can auto-vectorize
+5. **Avoid megamorphic calls** — >2 concrete types at a call site blocks inlining
+
+```java
+// BAD — random access, cache unfriendly
+int sum = 0;
+for (int col = 0; col < N; col++)
+    for (int row = 0; row < N; row++)
+        sum += matrix[row][col]; // column-major on row-major array
+
+// GOOD — sequential access, cache friendly
+for (int row = 0; row < N; row++)
+    for (int col = 0; col < N; col++)
+        sum += matrix[row][col]; // row-major sequential
+```
+
+---
+
+### 3.8 Memory Profiling & Tuning
+
+**Tools:**
+- **Eclipse MAT** — heap dump analysis, dominator tree, leak suspects
+- **JFR + JMC** — allocation profiling, live set analysis
+- **async-profiler -e alloc** — allocation flame graph
+- **jmap -histo:live** — histogram of live objects by class
+
+```bash
+# Heap dump
+jmap -dump:format=b,file=heap.hprof <pid>
+
+# Or trigger on OOM
+-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/
+
+# Allocation profiling with async-profiler
+./profiler.sh -d 30 -e alloc -f alloc-flame.html <pid>
+```
+
+**Heap sizing strategy:**
+```bash
+# Live set = heap used after full GC
+# Rule: Xmx = 3× live set (G1) or 2× (ZGC overhead lower)
+
+-Xms=Xmx          # Fix heap size — avoid resize pauses, predictable RSS
+-XX:+AlwaysPreTouch  # Pre-fault pages at startup — eliminates first-access latency
+```
+
+**Memory leak patterns:**
+1. Static collections accumulating entries
+2. ThreadLocal not cleaned in pooled threads
+3. Listeners/callbacks not deregistered
+4. Class loader leaks in app servers (Tomcat, OSGi)
+5. Unclosed streams/connections holding buffers
+
+```java
+// ThreadLocal leak in thread pool
+static final ThreadLocal<byte[]> BUFFER = ThreadLocal.withInitial(() -> new byte[1024]);
+
+// Fix: always remove after use
+try {
+    byte[] buf = BUFFER.get();
+    // use buf
+} finally {
+    BUFFER.remove(); // critical in pooled threads
+}
+```
+
+---
+
+### 3.9 I/O Optimization
+
+**Blocking vs Non-blocking:**
+```
+Blocking I/O:                    Non-blocking (NIO):
+Thread → read() → [blocked]      Selector polls N channels
+Thread → read() → [blocked]      Single thread handles N connections
+Thread → read() → [blocked]      (Netty, Vert.x model)
+```
+
+**Key techniques:**
+
+```java
+// 1. Buffered I/O — batch syscalls
+// BAD — 1 syscall per byte
+FileInputStream fis = new FileInputStream("file");
+int b;
+while ((b = fis.read()) != -1) { /* process */ }
+
+// GOOD — buffered
+try (BufferedReader br = new BufferedReader(new FileReader("file"), 65536)) {
+    String line;
+    while ((line = br.readLine()) != null) { /* process */ }
+}
+
+// 2. NIO for high-connection-count servers
+Selector selector = Selector.open();
+ServerSocketChannel server = ServerSocketChannel.open();
+server.configureBlocking(false);
+server.register(selector, SelectionKey.OP_ACCEPT);
+
+// 3. Memory-mapped files — zero-copy reads
+try (FileChannel fc = FileChannel.open(path)) {
+    MappedByteBuffer mmap = fc.map(FileChannel.MapMode.READ_ONLY, 0, fc.size());
+    // Direct access to file pages via virtual memory — no copy to user space
+}
+
+// 4. Direct buffers for network I/O — skip heap copy
+ByteBuffer directBuf = ByteBuffer.allocateDirect(8192);
+channel.read(directBuf);
+
+// 5. Async I/O (Java NIO.2)
+AsynchronousFileChannel afc = AsynchronousFileChannel.open(path);
+ByteBuffer buf = ByteBuffer.allocate(1024);
+afc.read(buf, 0, null, new CompletionHandler<Integer, Void>() {
+    public void completed(Integer result, Void att) { /* process */ }
+    public void failed(Throwable e, Void att) { /* handle */ }
+});
+```
+
+**Virtual threads (Java 21) I/O:**
+```java
+// Virtual threads block carrier thread during I/O → JVM unmounts, mounts another
+// No need for reactive/async programming for I/O-bound workloads
+try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    for (Request req : requests) {
+        executor.submit(() -> processWithBlockingIO(req)); // scales to millions
+    }
+}
+```
+
+---
+
+### 3.10 Cache Optimization
+
+**CPU Cache Hierarchy:**
+```
+L1 (32KB, ~4 cycles) → L2 (256KB, ~12 cycles) → L3 (8–32MB, ~40 cycles) → RAM (~100ns)
+```
+
+**Strategies:**
+
+```java
+// 1. Array of Structs vs Struct of Arrays
+// Array of Structs — bad cache for accessing single field
+class Point { double x, y, z; }
+Point[] points = new Point[N];  // iterating x: cache-unfriendly
+
+// Struct of Arrays — good cache locality for single field operations
+double[] xs = new double[N];
+double[] ys = new double[N];
+double[] zs = new double[N];  // iterating xs: sequential, fully cache-hot
+
+// 2. ArrayList vs LinkedList
+// ArrayList: O(n) insert but cache-hot iteration — prefer in most cases
+// LinkedList: node objects scattered in heap — terrible cache performance
+List<Integer> list = new ArrayList<>();  // almost always prefer this
+
+// 3. Warm up caches before benchmarking
+for (int i = 0; i < 10_000; i++) hotMethod(data); // warm L1/L2 + JIT
+```
+
+**NUMA Awareness:**
+```
+NUMA (Non-Uniform Memory Access):
+┌─────────────────────┐     ┌─────────────────────┐
+│  Socket 0           │     │  Socket 1           │
+│  CPU 0–7            │     │  CPU 8–15           │
+│  Local RAM (fast)   │────▶│  Local RAM (fast)   │
+│  4ns access         │     │  4ns access         │
+└─────────────────────┘     └─────────────────────┘
+Cross-NUMA access: ~40ns (10× slower)
+```
+
+```bash
+# JVM NUMA support
+-XX:+UseNUMA              # Allocate in thread-local NUMA node
+-XX:+UseParallelGC        # Best NUMA support (or G1 with UseNUMA)
+
+# OS-level
+numactl --localalloc java MyApp   # Bind to local node
+```
+
+---
+
+### 3.11 Throughput vs Latency Tuning
+
+**Throughput optimization:**
+```bash
+-XX:+UseParallelGC
+-XX:GCTimeRatio=19          # 95% time in app, 5% in GC
+-XX:+UseAdaptiveSizePolicy  # Let JVM auto-tune gen sizes
+-Xms=Xmx                   # Avoid heap resize
+```
+
+**Latency optimization (pause-sensitive):**
+```bash
+-XX:+UseZGC                 # Or Shenandoah
+-Xms=Xmx
+-XX:+AlwaysPreTouch
+-XX:+DisableExplicitGC      # Prevent System.gc() calls
+-XX:+UseTransparentHugePages # Reduce TLB misses on large heaps
+# OS: disable swap, CPU frequency scaling, THP
+```
+
+**Latency percentiles — what senior engineers measure:**
+```
+p50  (median)   — average user experience
+p95             — near-worst case
+p99             — SLA boundary (usually)
+p99.9 (p999)    — tail latency — often GC pauses
+p99.99          — critical for trading, infra
+```
+
+```java
+// HDR Histogram — accurate latency recording under load
+Histogram histogram = new Histogram(3600000000000L, 3);
+long start = System.nanoTime();
+doOperation();
+histogram.recordValue(System.nanoTime() - start);
+
+System.out.println("p99: " + histogram.getValueAtPercentile(99) + "ns");
+System.out.println("p999: " + histogram.getValueAtPercentile(99.9) + "ns");
+```
+
+---
+
+### 3.12 Performance Benchmarking with JMH
+
+```java
+@BenchmarkMode(Mode.AverageTime)
+@OutputTimeUnit(TimeUnit.NANOSECONDS)
+@Warmup(iterations = 5, time = 1)
+@Measurement(iterations = 10, time = 1)
+@Fork(2)
+@State(Scope.Benchmark)
+public class MyBenchmark {
+
+    @Param({"100", "1000", "10000"})
+    private int size;
+
+    private int[] data;
+
+    @Setup
+    public void setup() {
+        data = new int[size];
+        Random rng = new Random(42);
+        for (int i = 0; i < size; i++) data[i] = rng.nextInt();
+    }
+
+    @Benchmark
+    public int sumArray() {
+        int sum = 0;
+        for (int v : data) sum += v;
+        return sum; // return to prevent dead code elimination
+    }
+
+    @Benchmark
+    public void sumArrayBlackhole(Blackhole bh) {
+        int sum = 0;
+        for (int v : data) sum += v;
+        bh.consume(sum); // Blackhole prevents DCE without return overhead
+    }
+}
+```
+
+**JMH pitfalls:**
+- **Dead code elimination** — JIT removes unused results; use Blackhole or return
+- **Constant folding** — inputs must not be compile-time constants; use `@State`
+- **Insufficient warmup** — JIT not at peak; always ≥5 warmup iterations
+- **Not forking** — stale JIT state between benchmarks; always `-fork ≥ 1`
+- **Measuring cold paths** — ensure benchmark exercises the hot path
+
+---
+
+### 3.13 Load Testing
+
+**Tools:**
+- **Gatling** — Scala DSL, high concurrency, detailed reports
+- **k6** — JavaScript, modern, CI-friendly
+- **JMeter** — GUI-based, widely used, resource-heavy
+- **wrk / hey** — simple HTTP throughput tools
+
+```scala
+// Gatling scenario
+class MySimulation extends Simulation {
+  val httpProtocol = http.baseUrl("https://api.example.com")
+
+  val scn = scenario("API Load Test")
+    .exec(http("GET /users")
+      .get("/users")
+      .check(status.is(200))
+      .check(responseTimeInMillis.lte(200))) // assert p100 < 200ms
+
+  setUp(
+    scn.inject(
+      rampUsersPerSec(10).to(500).during(60.seconds), // ramp
+      constantUsersPerSec(500).during(300.seconds)    // sustain
+    )
+  ).protocols(httpProtocol)
+   .assertions(
+     global.responseTime.percentile(99).lt(500),
+     global.failedRequests.percent.lt(1)
+   )
+}
+```
+
+**Load test types:**
+- **Smoke test** — minimal load, verify basic function
+- **Load test** — expected load, measure NFRs
+- **Stress test** — beyond capacity, find breaking point
+- **Soak test** — sustained load, find memory leaks / degradation
+- **Spike test** — sudden burst, test elasticity
+
+---
+
+## 4. GC Tuning Strategies — Consolidated
+
+```bash
+# Step 1: Enable GC logging (Java 9+)
+-Xlog:gc*:file=gc.log:time,uptime,level,tags:filecount=5,filesize=20m
+
+# Step 2: Analyze with GCEasy.io or GCViewer
+
+# Step 3: Tune based on findings
+
+# High allocation rate → frequent minor GC
+-XX:G1NewSizePercent=30       # Increase young gen → less frequent minor GC
+
+# High old gen occupancy → frequent mixed GC
+-XX:InitiatingHeapOccupancyPercent=35  # Start marking earlier
+
+# Long GC pauses
+-XX:MaxGCPauseMillis=100      # Stricter target for G1
+# Or switch to ZGC/Shenandoah
+
+# Humongous allocations in G1
+-XX:G1HeapRegionSize=32m      # Increase region size → fewer humongous objects
+
+# Promotion failures (young gen not draining fast enough)
+-XX:G1ReservePercent=20       # Reserve 20% headroom for promotions
+```
+
+---
+
+## 5. Interview Questions & Expert Answers
+
+**Q1: What is the difference between throughput and latency, and how do you tune for each?**
+
+**A:** Throughput = operations per second; latency = time per operation. They are in tension: maximizing throughput often requires batching work (increasing latency), while minimizing latency requires processing immediately (reducing throughput efficiency). For throughput: use Parallel GC, large heap, high `GCTimeRatio`. For latency: use ZGC/Shenandoah, fix heap size (`-Xms=Xmx`), `AlwaysPreTouch`, avoid System.gc(), disable swap at OS level.
+
+---
+
+**Q2: Explain G1GC vs ZGC. When would you choose one over the other?**
+
+**A:** G1 is the default for most workloads — good balance of throughput and pause time (~50–200ms), suitable for 4–32GB heaps. ZGC targets sub-millisecond pauses regardless of heap size, ideal for latency-sensitive systems (trading, real-time APIs) or very large heaps (>32GB). ZGC costs: ~10–20% higher CPU (concurrent work), ~20% more memory. Choose ZGC when p99.9 pause budget is <10ms; choose G1 for general-purpose workloads prioritizing throughput.
+
+---
+
+**Q3: What is false sharing and how do you fix it?**
+
+**A:** False sharing occurs when two threads write to different fields that happen to share the same CPU cache line (64 bytes). Each write invalidates the cache line on other CPUs, causing cache coherence traffic even though threads aren't accessing the same data. Fix: use `@Contended` annotation (requires `-XX:-RestrictContended`) or manually pad fields with dummy long fields to ensure each hot field occupies its own cache line. Classic example: counters in a concurrent data structure.
+
+---
+
+**Q4: What is escape analysis and how does it reduce GC pressure?**
+
+**A:** Escape analysis is a JIT optimization where the compiler determines whether an object's reference escapes its creating method/thread. If it doesn't escape, the object can be stack-allocated (automatically freed on method return — zero GC cost), scalar-replaced (fields treated as local variables), or locks on it can be elided. Escape analysis is defeated by returning the object, storing it in a field, passing it to methods the JIT can't inline, or using reflection on it.
+
+---
+
+**Q5: How do you diagnose a memory leak in a production JVM?**
+
+**A:** (1) Enable GC logging and monitor heap after full GCs — growing live set indicates leak. (2) Capture heap dump via `jmap -dump` or `-XX:+HeapDumpOnOutOfMemoryError`. (3) Analyze with Eclipse MAT: check dominator tree for large retained heaps, run "leak suspects" report. (4) Look for common patterns: static collections, ThreadLocal not removed, unclosed resources, listener accumulation, class loader leaks. (5) Use async-profiler allocation profiling in staging to find allocation hot spots.
+
+---
+
+**Q6: When would you use object pooling, and when is it counterproductive?**
+
+**A:** Use pooling for expensive-to-create objects: DB/network connections, threads, large byte buffers, SSL engines. Modern generational GC handles short-lived small objects cheaply via bump-pointer allocation in Eden — pooling them adds complexity and contention without benefit. Pooling is counterproductive when: pool adds more overhead than creation cost, object state management is error-prone (dirty state bugs), pool is a concurrency bottleneck, or objects are small and allocation rate doesn't drive GC pressure (measure first).
+
+---
+
+**Q7: Explain the JIT compilation pipeline. What is tiered compilation?**
+
+**A:** HotSpot uses a 5-tier compilation model: Tier 0 (interpreter), Tier 1-3 (C1 — fast, progressively more optimized), Tier 4 (C2 — aggressive, slow compile). Methods start interpreted, get profiled, compiled by C1 for quick optimization, and eventually promoted to C2 for maximum optimization once they're confirmed hot. C2 performs: aggressive inlining, escape analysis, loop unrolling, vectorization, dead code elimination. Tiered compilation (`-XX:+TieredCompilation`, on by default) balances startup time (C1) with peak throughput (C2).
+
+---
+
+**Q8: How do you size a thread pool for I/O-bound vs CPU-bound work?**
+
+**A:** CPU-bound: pool size = number of CPU cores (avoid context switching overhead). I/O-bound: pool size = cores × (1 + wait\_time / compute\_time). With 90% I/O wait and 8 cores → 80 threads. In practice, measure: start with cores × 2 for mixed workloads, load test, and observe throughput and CPU utilization. With Java 21 virtual threads, I/O-bound workloads no longer require large platform thread pools — use one virtual thread per task; JVM manages the carrier thread pool automatically.
+
+---
+
+**Q9: What is NUMA and how does it affect JVM performance?**
+
+**A:** NUMA (Non-Uniform Memory Access) is a memory architecture in multi-socket servers where each CPU socket has local RAM (fast, ~4ns) and can access remote RAM on other sockets (slow, ~40ns). JVM `-XX:+UseNUMA` makes the allocator aware of NUMA topology — Eden space is striped across NUMA nodes, and threads allocate on their local node. Critical for heap-intensive apps on large NUMA machines. Also: use `numactl --localalloc` to bind JVM process, and pin thread pools to CPU sets with same-node memory.
+
+---
+
+**Q10: What tools would you use to profile CPU usage vs memory allocation in production?**
+
+**A:** **CPU:** async-profiler (`-e cpu`, generates flame graphs) — no safepoint bias, <3% overhead, safe for production. **Allocation:** async-profiler (`-e alloc`) — shows allocation hot spots. **Memory:** JFR + JMC for heap/GC analysis; `jmap -histo:live` for quick class histogram. **Production-safe:** JFR always-on with low settings (`-XX:+FlightRecorder`), async-profiler for targeted short bursts. Avoid traditional profilers (JProfiler, YourKit) in production — they use bytecode instrumentation with non-trivial overhead.
+
+---
+
+**Q11: How does GC impact tail latency (p99.9)?**
+
+**A:** GC pauses directly cause latency spikes at tail percentiles. Even a 50ms STW pause every 30 seconds appears in p99.9 under high load. Solutions: (1) Move to concurrent collectors (ZGC/Shenandoah) with sub-ms pauses. (2) Reduce allocation rate to reduce GC frequency. (3) Increase heap to reduce GC frequency. (4) Use HDRHistogram to accurately measure tail latency. (5) Pre-allocate; avoid allocating on critical path. (6) Warmup: pre-promote objects to Old Gen before accepting live traffic to avoid minor GC spikes.
+
+---
+
+**Q12: What is coordinated omission in load testing?**
+
+**A:** Coordinated omission occurs when a load tester backs off when the system slows down — the load generator stops sending new requests while waiting for slow ones, inadvertently hiding latency under load. This makes results look better than reality. Tools like Gatling and properly-configured JMeter use closed-loop models that can suffer from this. **Fix:** Use open-loop load (constant arrival rate regardless of response time) and HDRHistogram to record intended vs actual start times. Gil Tene's `wrk2` and Gatling's open model address this.
+
+---
+
+**Q13: How do you tune JVM for running inside a container?**
+
+**A:** Pre-Java 10, JVM read CPU/memory from host — a 4GB container on a 256GB host would see 256GB and size heap accordingly → OOM. Fixes: `-XX:+UseContainerSupport` (default Java 10+, backported to 8u191) — JVM respects cgroup limits. `-XX:MaxRAMPercentage=75.0` — use 75% of container memory for heap (leave room for Metaspace, threads, direct buffers). `-XX:ActiveProcessorCount=N` — override CPU count for thread pool sizing. Mount `/sys/fs/cgroup` correctly in Docker. Avoid `-Xmx` hard-coding in favor of `MaxRAMPercentage` for portability.
+
+---
+
+**Q14: Explain the difference between `LongAdder` and `AtomicLong`.**
+
+**A:** Both provide thread-safe long counters. `AtomicLong` uses a single CAS on one memory location — fast when contention is low, degrades under high contention (many threads CAS-failing and retrying). `LongAdder` maintains a cell array (one per thread group); threads update their cell independently and the total is summed on `sum()`. Under high contention, `LongAdder` has dramatically higher throughput at the cost of: slightly higher memory, non-atomic reads (sum() is approximate if updates concurrent), and slightly higher `sum()` cost. Use `LongAdder` for high-contention counters/accumulators; `AtomicLong` when you need atomic CAS semantics (`compareAndSet`).
+
+---
+
+**Q15: How do you approach a performance problem you've never seen before?**
+
+**A (structured approach):**
+1. **Define the problem:** What metric? p99 latency? Throughput? CPU%? OOM?
+2. **Establish baseline:** Measure current state with JMH, Gatling, profilers
+3. **Identify bottleneck (USE/RED method):** Utilization, Saturation, Errors per resource (CPU, memory, network, disk, locks)
+4. **Profile, don't guess:** Flame graph for CPU/allocation; GC logs for pauses; thread dump for contention
+5. **Isolate:** Reproduce in isolation (microbenchmark if possible)
+6. **Fix the biggest bottleneck:** Amdahl's law — fixing a 5% bottleneck gets <5% improvement
+7. **Measure again:** Verify improvement didn't shift bottleneck
+8. **Document:** Record what was measured, changed, and the outcome
+
+---
+
+## 6. Advanced / Senior-Level Considerations
+
+**Mechanical sympathy:**
+- Understand CPU cache hierarchy, branch prediction, pipeline stalls
+- Write data structures with cache-friendly layout (arrays > linked nodes)
+- Avoid unpredictable branches in hot loops
+
+**Amdahl's Law:**
+```
+Speedup = 1 / (S + (1-S)/N)
+S = serial fraction, N = parallelism
+Even 5% serial code limits speedup to 20× regardless of thread count
+```
+
+**Little's Law (queuing theory):**
+```
+L = λW
+L = average items in system
+λ = arrival rate
+W = average time in system
+
+If latency (W) doubles → queue length (L) doubles at same throughput
+→ Latency and capacity are coupled
+```
+
+**GC and distributed systems:**
+- GC pauses cause missed heartbeats → false leader elections in Raft/Paxos
+- Mitigate: GC-pause-aware timeouts, ZGC for consensus-critical nodes, pre-promote before becoming leader
+- Cassandra, Kafka, Elasticsearch all have GC tuning guides for this reason
+
+**Profiling in production:**
+- async-profiler with `-e cpu` + flame graph is standard
+- JFR continuous recording: store last 5min, dump on alert trigger
+- Correlate GC logs with application latency percentiles in time-series (Prometheus + Grafana)
+
+**Project Loom (Java 21+):**
+- Virtual threads eliminate the need for reactive frameworks for I/O-bound work
+- Carrier thread pool (ForkJoinPool) still CPU-bound → set to core count
+- Pinning issue: `synchronized` blocks pin virtual thread to carrier (fix: use `ReentrantLock`)
+- Monitor pinning: `-Djdk.tracePinnedThreads=full`
+
+---
+
+## 7. Summary / Cheat Sheet
+
+```
+MEMORY
+├── Heap: Young (Eden+S0+S1) + Old + Metaspace
+├── Stack: per thread, primitives + refs, ZGC cost, -Xss
+├── Off-heap: ByteBuffer.allocateDirect(), not GC'd
+└── Size: Xmx = 3× live set (G1), fix Xms=Xmx
+
+GC SELECTION
+├── Latency-critical (<1ms): ZGC (Java 15+) or Shenandoah  
+├── General purpose: G1GC (default Java 9+)
+├── Max throughput (batch): ParallelGC
+└── Container-aware: -XX:+UseContainerSupport + MaxRAMPercentage=75
+
+JIT / ALLOCATION
+├── Escape analysis: non-escaping objects → stack allocated
+├── Keep hot methods <35 bytecodes for inlining
+├── Avoid boxing in hot paths → primitive collections
+├── StringBuilder >> String concat in loops
+
+THREADING
+├── CPU-bound pool: = core count
+├── I/O-bound pool: = cores × (1 + wait/compute)
+├── Virtual threads (Java 21): I/O-bound, no sizing needed
+├── LongAdder > AtomicLong under contention
+└── @Contended / padding → fix false sharing
+
+PROFILING TOOLS
+├── async-profiler: CPU flame graph, allocation (prod-safe)
+├── JFR/JMC: comprehensive, always-on, <1% overhead
+├── MAT: heap dump analysis, leak detection
+└── GCEasy / GCViewer: GC log analysis
+
+KEY FLAGS
+-Xms=Xmx                          # Fix heap
+-XX:+UseZGC                        # Low latency
+-XX:MaxGCPauseMillis=100           # G1 target
+-XX:+HeapDumpOnOutOfMemoryError    # Debug OOM
+-XX:+AlwaysPreTouch                # Pre-fault pages
+-Xlog:gc*:file=gc.log:time         # GC logging
+-XX:MaxRAMPercentage=75.0          # Container heap
+
+GOLDEN RULES
+1. Measure first — never optimize blind
+2. Fix the biggest bottleneck (Amdahl's Law)
+3. Throughput vs latency are always in tension
+4. Modern GC handles short-lived objects well — pool only expensive objects
+5. Tail latency (p99.9) is dominated by GC pauses → ZGC for SLA requirements
+```
+
+# Java Instrumentation — Senior Developer Study Notes
+
+---
+
+## 1. Topic Overview
+
+**Definition:** Java Instrumentation is the ability to observe, measure, and modify the behavior of Java applications — either at build time, load time, or runtime — without changing source code. It underpins APM tools, profilers, security scanners, mocking frameworks, and AOP frameworks.
+
+**Why it matters:**
+- Powers industry tools: New Relic, Datadog, Dynatrace, Jacoco, Mockito, Spring AOP, OpenTelemetry
+- Enables cross-cutting concerns (logging, tracing, metrics) without polluting business logic
+- Core skill for platform/infrastructure engineers building observability tooling
+- Required knowledge for debugging deep framework behavior and agent-based architectures
+
+**Real-world applications:**
+- **APM agents** — auto-instrument HTTP, DB, cache calls → distributed traces (OpenTelemetry Java agent)
+- **Code coverage** — Jacoco instruments bytecode to record branch/line execution
+- **Security scanning** — RASP (Runtime Application Self-Protection) intercepts dangerous calls
+- **Mocking** — Mockito/ByteBuddy rewrites class bytecode to inject test doubles
+- **Hot reload** — JRebel instruments class loaders to swap implementations without restart
+- **Chaos engineering** — inject faults into specific methods at runtime
+
+---
+
+## 2. Core Concepts — Mental Model
+
+```
+Source Code (.java)
+        │
+        ▼ javac
+  Bytecode (.class) ◄──── Build-time instrumentation (ASM, Javassist at compile)
+        │
+        ▼ ClassLoader
+  ┌─────────────────────────────────────────────────┐
+  │  JVM Class Loading Pipeline                     │
+  │                                                 │
+  │  findClass() → defineClass() → [ClassFileTransformer] → link → initialize
+  │                                       ▲                                   
+  │                                 Java Agent /                              
+  │                                 java.lang.instrument                      
+  │                                 (load-time instrumentation)               
+  └─────────────────────────────────────────────────┘
+        │
+        ▼ Running
+  Loaded Class ◄──── Runtime instrumentation (retransform, redefine)
+        │
+        ▼
+   JVMTI layer (C/C++ native interface — deeper than java.lang.instrument)
+```
+
+**Three instrumentation windows:**
+1. **Build-time** — transform `.class` files in CI pipeline (Gradle/Maven plugins)
+2. **Load-time** — intercept class loading via Java agent `ClassFileTransformer`
+3. **Runtime** — retransform already-loaded classes via `Instrumentation.retransformClasses()`
+
+---
+
+## 3. Subtopics Breakdown
+
+---
+
+### 3.1 Java Agent Architecture
+
+**What is a Java agent?**
+A JAR with a special manifest entry that the JVM loads before (or after) the main application. It receives an `Instrumentation` handle — the gateway to all bytecode manipulation.
+
+**Two attachment modes:**
+
+```
+Static attachment (premain):
+java -javaagent:agent.jar=options MainClass
+JVM loads agent BEFORE main() → full access to all classes before they load
+
+Dynamic attachment (agentmain):
+Attach API → running JVM → load agent after startup
+Used by: profilers, debuggers attaching to live processes
+```
+
+**Agent JAR manifest (`MANIFEST.MF`):**
+```manifest
+Manifest-Version: 1.0
+Premain-Class: com.example.MyAgent
+Agent-Class: com.example.MyAgent
+Can-Redefine-Classes: true
+Can-Retransform-Classes: true
+Can-Set-Native-Method-Prefix: false
+Boot-Class-Path: agent-deps.jar
+```
+
+**Agent entry points:**
+```java
+public class MyAgent {
+
+    // Called before main() — static attach via -javaagent
+    public static void premain(String agentArgs, Instrumentation inst) {
+        System.out.println("Agent loaded, args: " + agentArgs);
+        inst.addTransformer(new MyTransformer(), true); // true = can retransform
+    }
+
+    // Called when dynamically attached to running JVM
+    public static void agentmain(String agentArgs, Instrumentation inst) {
+        inst.addTransformer(new MyTransformer(), true);
+        // Must explicitly retransform already-loaded classes
+        for (Class<?> clazz : inst.getAllLoadedClasses()) {
+            if (inst.isRetransformClassesSupported()
+                    && isTarget(clazz)) {
+                try {
+                    inst.retransformClasses(clazz);
+                } catch (UnmodifiableClassException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+}
+```
+
+**Dynamic attach (attach to running process):**
+```java
+// Requires tools.jar / JDK (not JRE); attach API
+import com.sun.tools.attach.VirtualMachine;
+
+public class Attacher {
+    public static void main(String[] args) throws Exception {
+        String pid = args[0];           // target PID
+        String agentJar = args[1];      // path to agent JAR
+
+        VirtualMachine vm = VirtualMachine.attach(pid);
+        try {
+            vm.loadAgent(agentJar, "agentArgs=value");
+        } finally {
+            vm.detach();
+        }
+    }
+}
+```
+
+**Key details:**
+- Agent classpath is isolated — use `Boot-Class-Path` for classes needed by instrumented code
+- `Instrumentation` object is thread-safe; store it statically for later use
+- Multiple agents can be loaded; transformers run in registration order
+- Agent isolation: agent classes should NOT conflict with application classes
+
+**Common pitfalls:**
+- Forgetting `Can-Retransform-Classes: true` → retransform silently does nothing
+- Putting heavy dependencies in agent JAR without shade/relocation → classpath conflicts
+- Not handling `null` return from transformer (means "no change") vs returning original bytes
+
+---
+
+### 3.2 `java.lang.instrument` API
+
+**Core interface — `Instrumentation`:**
+
+```java
+public interface Instrumentation {
+
+    // Register a transformer; isRetransformable: can it be called on retransform?
+    void addTransformer(ClassFileTransformer transformer, boolean canRetransform);
+    void addTransformer(ClassFileTransformer transformer); // canRetransform=false
+    boolean removeTransformer(ClassFileTransformer transformer);
+
+    // Retransform already-loaded classes (runs all retransformable transformers)
+    void retransformClasses(Class<?>... classes) throws UnmodifiableClassException;
+
+    // Redefine: replace bytecode entirely (no transformer chain)
+    void redefineClasses(ClassDefinition... definitions)
+        throws ClassNotFoundException, UnmodifiableClassException;
+
+    // Introspection
+    Class<?>[] getAllLoadedClasses();
+    Class<?>[] getInitiatedClasses(ClassLoader loader);
+    long getObjectSize(Object objectToSize);  // shallow size
+    boolean isRetransformClassesSupported();
+    boolean isRedefineClassesSupported();
+    boolean isModifiableClass(Class<?> theClass);
+
+    // Append to bootstrap/system classpath
+    void appendToBootstrapClassLoaderSearch(JarFile jarfile);
+    void appendToSystemClassLoaderSearch(JarFile jarfile);
+}
+```
+
+**`ClassFileTransformer` — the workhorse:**
+```java
+public interface ClassFileTransformer {
+    /**
+     * @param loader         class loader (null = bootstrap)
+     * @param className      internal name: "com/example/Foo"
+     * @param classBeingRedefined  non-null on retransform/redefine
+     * @param protectionDomain
+     * @param classfileBuffer original bytecode
+     * @return modified bytecode, or null for no change
+     */
+    byte[] transform(ClassLoader loader,
+                     String className,
+                     Class<?> classBeingRedefined,
+                     ProtectionDomain protectionDomain,
+                     byte[] classfileBuffer)
+        throws IllegalClassFormatException;
+}
+```
+
+**Minimal working transformer:**
+```java
+public class LoggingTransformer implements ClassFileTransformer {
+
+    private static final String TARGET = "com/example/OrderService";
+
+    @Override
+    public byte[] transform(ClassLoader loader, String className,
+                            Class<?> classBeingRedefined,
+                            ProtectionDomain protectionDomain,
+                            byte[] classfileBuffer) {
+
+        if (!TARGET.equals(className)) {
+            return null; // null = unchanged; returning classfileBuffer is also fine
+        }
+
+        try {
+            // Use ASM/Javassist/ByteBuddy here to modify classfileBuffer
+            return instrumentBytes(classfileBuffer);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null; // fail safe: return null → use original bytecode
+        }
+    }
+}
+```
+
+**redefine vs retransform:**
+```
+retransformClasses():
+  → Runs transformer chain again on already-loaded class
+  → Transformer receives ORIGINAL bytecode (not previously transformed)
+  → Use for: updating instrumentation without restart
+
+redefineClasses():
+  → Directly replaces bytecode (bypasses transformer chain)
+  → More restrictive: cannot add/remove methods or fields
+  → Use for: hot-swap debugger-style patching
+```
+
+**Common pitfalls:**
+- Throwing exceptions in transformer → class loading fails → NoClassDefFoundError
+- Modifying class structure (adding fields) during retransform → VerifyError / UnsupportedOperationException
+- Not filtering `null` className (array types, synthetic classes)
+
+---
+
+### 3.3 JVMTI Basics
+
+**What is JVMTI?**
+JVM Tool Interface — a C/C++ native API providing deeper access than Java's `java.lang.instrument`. It is the foundation that `java.lang.instrument` itself is built on.
+
+```
+Java Application
+      │
+java.lang.instrument (Java API)
+      │
+    JVMTI (C/C++ native agent interface)
+      │
+   JVM internals (GC, threads, heap, class loading, breakpoints)
+```
+
+**JVMTI capabilities (beyond java.lang.instrument):**
+- Heap walking and object tagging
+- Breakpoints and single-stepping
+- Thread suspension and stack inspection
+- Monitor contention tracking
+- Method entry/exit events at native level
+- Field access/modification watches
+- Native method prefix wrapping
+
+**JVMTI agent structure (C):**
+```c
+#include <jvmti.h>
+
+// Agent_OnLoad called when agent is loaded
+JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM *jvm, char *options, void *reserved) {
+    jvmtiEnv *jvmti;
+    jvm->GetEnv((void**)&jvmti, JVMTI_VERSION_1_2);
+
+    // Request capabilities
+    jvmtiCapabilities caps = {0};
+    caps.can_generate_method_entry_events = 1;
+    caps.can_generate_method_exit_events = 1;
+    jvmti->AddCapabilities(&caps);
+
+    // Register event callbacks
+    jvmtiEventCallbacks callbacks = {0};
+    callbacks.MethodEntry = &MethodEntryCallback;
+    callbacks.MethodExit = &MethodExitCallback;
+    jvmti->SetEventCallbacks(&callbacks, sizeof(callbacks));
+
+    // Enable events
+    jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_METHOD_ENTRY, NULL);
+    jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_METHOD_EXIT, NULL);
+
+    return JNI_OK;
+}
+
+void JNICALL MethodEntryCallback(jvmtiEnv *jvmti, JNIEnv *jni,
+                                  jthread thread, jmethodID method) {
+    char *name, *sig;
+    jvmti->GetMethodName(method, &name, &sig, NULL);
+    printf("Entering: %s%s\n", name, sig);
+    jvmti->Deallocate((unsigned char*)name);
+    jvmti->Deallocate((unsigned char*)sig);
+}
+```
+
+```bash
+# Load JVMTI agent
+java -agentlib:myagent=option1=v1 MainClass
+# or
+java -agentpath:/path/to/libmyagent.so=options MainClass
+```
+
+**Key details:**
+- JVMTI agents run in the JVM process — bugs can crash the JVM
+- Method entry/exit events: ~10–30% overhead → use selectively
+- Used by: async-profiler (JVMTI + AsyncGetCallTrace), JFR, debuggers (JDWP over JVMTI)
+- `AsyncGetCallTrace` (unofficial JVMTI extension) — used by async-profiler to avoid safepoint bias
+
+**Senior consideration:** Most Java engineers never write JVMTI agents directly — they use Java agents + bytecode libs. Know JVMTI conceptually to understand what's under the hood of profilers and why async-profiler is more accurate than JDWP-based profilers.
+
+---
+
+### 3.4 Bytecode Fundamentals
+
+**JVM is a stack machine:**
+```
+Java source:          int c = a + b;
+
+Bytecode:
+  iload_1    // push local var 1 (a) onto operand stack
+  iload_2    // push local var 2 (b) onto operand stack
+  iadd       // pop 2 ints, push their sum
+  istore_3   // pop sum, store in local var 3 (c)
+```
+
+**Class file structure:**
+```
+ClassFile {
+  magic:             0xCAFEBABE
+  minor/major_version
+  constant_pool[]    // strings, class refs, method refs, field refs
+  access_flags       // public, final, abstract, etc.
+  this_class / super_class
+  interfaces[]
+  fields[]           // name, descriptor, attributes
+  methods[]          // name, descriptor, Code attribute (bytecode)
+  attributes[]       // SourceFile, InnerClasses, etc.
+}
+```
+
+**Key bytecode instructions:**
+```
+Load/Store:  iload, aload, istore, astore (i=int, a=reference, l=long, f=float, d=double)
+Arithmetic:  iadd, isub, imul, idiv, irem, ineg
+Object:      new, dup, invokespecial (<init>), getfield, putfield
+Invocation:  invokevirtual, invokeinterface, invokestatic, invokespecial, invokedynamic
+Control:     ifeq, ifne, iflt, ifge, goto, tableswitch
+Stack:       dup, pop, swap
+Return:      ireturn, areturn, return (void)
+```
+
+**Method descriptor format:**
+```
+(param-types)return-type
+()V                    → void method, no params
+(ILjava/lang/String;)Z → (int, String) → boolean
+([B)V                  → (byte[]) → void
+```
+
+---
+
+### 3.5 ASM — Bytecode Manipulation
+
+**What is ASM?**
+A low-level bytecode manipulation library using the Visitor pattern to parse and generate `.class` files. Used internally by most higher-level tools (Spring, Groovy, Kotlin, Jacoco).
+
+**Architecture — Visitor pattern:**
+```
+ClassReader → ClassVisitor chain → ClassWriter
+              (transformers)       (generates bytes)
+
+ClassReader.accept(classVisitor)
+  → classVisitor.visit()           (class header)
+  → classVisitor.visitField()      (per field)
+  → classVisitor.visitMethod()     → MethodVisitor
+       → methodVisitor.visitCode()
+       → methodVisitor.visitInsn()  (per instruction)
+       → methodVisitor.visitMaxs()
+       → methodVisitor.visitEnd()
+  → classVisitor.visitEnd()
+```
+
+**Complete working example — method timing instrumentation:**
+```java
+import org.objectweb.asm.*;
+import org.objectweb.asm.commons.AdviceAdapter;
+
+// ClassFileTransformer using ASM
+public class TimingTransformer implements ClassFileTransformer {
+
+    @Override
+    public byte[] transform(ClassLoader loader, String className,
+                            Class<?> classBeingRedefined,
+                            ProtectionDomain domain, byte[] bytes) {
+        // Only instrument target package
+        if (!className.startsWith("com/example/service")) return null;
+
+        try {
+            ClassReader cr = new ClassReader(bytes);
+            ClassWriter cw = new ClassWriter(
+                cr, ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS
+            );
+            ClassVisitor cv = new TimingClassVisitor(cw);
+            cr.accept(cv, ClassReader.EXPAND_FRAMES);
+            return cw.toByteArray();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+}
+
+class TimingClassVisitor extends ClassVisitor {
+    private String className;
+
+    TimingClassVisitor(ClassVisitor cv) {
+        super(Opcodes.ASM9, cv);
+    }
+
+    @Override
+    public void visit(int version, int access, String name,
+                      String signature, String superName, String[] interfaces) {
+        this.className = name;
+        super.visit(version, access, name, signature, superName, interfaces);
+    }
+
+    @Override
+    public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                     String signature, String[] exceptions) {
+        MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions);
+        // Skip constructors and synthetic methods
+        if (name.equals("<init>") || name.equals("<clinit>") || mv == null) {
+            return mv;
+        }
+        return new TimingMethodVisitor(mv, access, name, descriptor);
+    }
+}
+
+// AdviceAdapter handles constructors safely, provides onMethodEnter/Exit hooks
+class TimingMethodVisitor extends AdviceAdapter {
+    private final String methodName;
+    private int startTimeVar; // local variable slot index
+
+    TimingMethodVisitor(MethodVisitor mv, int access, String name, String desc) {
+        super(Opcodes.ASM9, mv, access, name, desc);
+        this.methodName = name;
+    }
+
+    @Override
+    protected void onMethodEnter() {
+        // long startTime = System.nanoTime();
+        mv.visitMethodInsn(
+            INVOKESTATIC, "java/lang/System", "nanoTime", "()J", false
+        );
+        startTimeVar = newLocal(Type.LONG_TYPE); // allocate new local var
+        mv.visitVarInsn(LSTORE, startTimeVar);
+    }
+
+    @Override
+    protected void onMethodExit(int opcode) {
+        if (opcode == ATHROW) return; // skip on exception exit (optional)
+
+        // long elapsed = System.nanoTime() - startTime;
+        mv.visitMethodInsn(
+            INVOKESTATIC, "java/lang/System", "nanoTime", "()J", false
+        );
+        mv.visitVarInsn(LLOAD, startTimeVar);
+        mv.visitInsn(LSUB);
+
+        // MetricsRegistry.record(methodName, elapsed);
+        mv.visitLdcInsn(methodName);
+        mv.visitInsn(DUP2_X1); // reorder stack: [elapsed, methodName] → [methodName, elapsed]
+        mv.visitInsn(POP2);
+        mv.visitMethodInsn(
+            INVOKESTATIC, "com/example/MetricsRegistry", "record",
+            "(Ljava/lang/String;J)V", false
+        );
+    }
+}
+```
+
+**ClassWriter flags:**
+```java
+// COMPUTE_MAXS: auto-compute max stack and locals (slower but safe)
+// COMPUTE_FRAMES: auto-compute stack map frames (required for Java 7+)
+// Use both when adding/removing instructions
+new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS)
+```
+
+**ASM Tree API (vs Core API):**
+```java
+// Core API: streaming (low memory, complex logic harder)
+// Tree API: loads entire class into object graph (easier, more memory)
+
+ClassNode cn = new ClassNode();
+new ClassReader(bytes).accept(cn, 0);
+
+for (MethodNode mn : cn.methods) {
+    InsnList insns = mn.instructions;
+    for (AbstractInsnNode insn : insns) {
+        if (insn.getOpcode() == INVOKEVIRTUAL) {
+            MethodInsnNode min = (MethodInsnNode) insn;
+            if ("println".equals(min.name)) {
+                // Insert before this instruction
+                insns.insertBefore(insn, new LdcInsnNode("Intercepted!"));
+            }
+        }
+    }
+}
+
+ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
+cn.accept(cw);
+return cw.toByteArray();
+```
+
+**Common pitfalls:**
+- Forgetting `COMPUTE_FRAMES` → invalid stack map frames → VerifyError at runtime
+- Not handling all exit paths (normal return, exception paths) in advice
+- Corrupting the operand stack (wrong push/pop balance) → VerifyError
+- `ClassWriter.getCommonSuperClass()` called during frame computation — needs class loading context
+
+---
+
+### 3.6 Javassist
+
+**What is Javassist?**
+A bytecode library that lets you manipulate Java classes using **Java source code strings** — far more developer-friendly than ASM but less performant and flexible.
+
+```java
+import javassist.*;
+
+public class JavassistExample {
+
+    public static byte[] instrument(byte[] originalBytes) throws Exception {
+        ClassPool pool = ClassPool.getDefault();
+        pool.appendClassPath(new LoaderClassPath(
+            Thread.currentThread().getContextClassLoader()
+        ));
+
+        // Load class from bytes
+        CtClass cc = pool.makeClass(new ByteArrayInputStream(originalBytes));
+
+        // Instrument all methods
+        for (CtMethod method : cc.getDeclaredMethods()) {
+            instrumentMethod(method);
+        }
+
+        byte[] modified = cc.toBytecode();
+        cc.detach(); // free from ClassPool — avoid memory leak!
+        return modified;
+    }
+
+    private static void instrumentMethod(CtMethod method) throws Exception {
+        // $0 = this, $1,$2,... = params, $_ = return value, $args = Object[]
+        // $r = return type, $w = wrapper type, $sig = method signature
+
+        method.addLocalVariable("__startTime", CtClass.longType);
+
+        // Insert at method entry
+        method.insertBefore("{ __startTime = System.nanoTime(); }");
+
+        // Insert at method exit (before each return)
+        method.insertAfter(
+            "{ long __elapsed = System.nanoTime() - __startTime;" +
+            "  System.out.println(\"" + method.getName() + " took: \" + __elapsed + \"ns\"); }"
+        );
+
+        // Wrap with try-catch
+        method.addCatch(
+            "{ System.err.println(\"Exception in " + method.getName() + ": \" + $e); throw $e; }",
+            ClassPool.getDefault().get("java.lang.Exception")
+        );
+    }
+}
+```
+
+**Javassist method body injection — special variables:**
+```java
+// $0        → this (instance methods)
+// $1, $2    → first, second parameter
+// $args     → Object[] of all parameters
+// $_        → return value (in insertAfter)
+// $r        → return type (for casting)
+// $w        → wrapper type (primitive → wrapper)
+// $e        → caught exception (in addCatch)
+// $class    → java.lang.Class of current class
+// $sig      → String[] of parameter type names
+// $type     → java.lang.Class of return type
+
+// Example: log all parameters
+method.insertBefore(
+    "{ System.out.println(\"Args: \" + java.util.Arrays.toString($args)); }"
+);
+
+// Example: modify return value
+method.insertAfter(
+    "{ System.out.println(\"Returning: \" + $_); }"
+);
+```
+
+**Dynamic class creation with Javassist:**
+```java
+ClassPool pool = ClassPool.getDefault();
+CtClass cc = pool.makeClass("com.example.Generated");
+cc.setSuperclass(pool.get("com.example.BaseService"));
+
+// Add field
+CtField field = new CtField(pool.get("java.lang.String"), "name", cc);
+field.setModifiers(Modifier.PRIVATE);
+cc.addField(field, CtField.Initializer.constant("default"));
+
+// Add method
+CtMethod method = CtNewMethod.make(
+    "public String getName() { return name; }", cc
+);
+cc.addMethod(method);
+
+// Instantiate
+Class<?> generated = cc.toClass();
+Object instance = generated.getDeclaredConstructor().newInstance();
+```
+
+**ASM vs Javassist comparison:**
+```
+                ASM                     Javassist
+API level:      Low (bytecode)          High (source code strings)
+Performance:    Fast                    Slower (compiles source strings)
+Flexibility:    Total control           Limited by source compilation
+Learning curve: Steep                  Gentle
+Runtime dep:    Small (~350KB)          Larger
+Use when:       Performance critical,   Prototyping, simpler
+                complex transforms      instrumentation needs
+Used by:        Spring, Hibernate,      JBoss, some legacy APMs
+                Jacoco, Kotlin
+```
+
+**Common pitfalls:**
+- Forgetting `cc.detach()` → ClassPool grows unboundedly → memory leak
+- Source string compilation errors only caught at runtime
+- Cannot instrument final classes without `cc.setModifiers()`
+- ClassPool sharing in multi-classloader environments → class resolution errors
+
+---
+
+### 3.7 Byte Buddy — Modern Instrumentation
+
+**What is Byte Buddy?**
+A high-level, type-safe bytecode generation and manipulation library. The standard choice for modern Java agents and frameworks. Mockito, OpenTelemetry Java agent, and many others use it.
+
+**Key differentiators:**
+- Fluent, type-safe API — no string-based source, no bytecode knowledge required
+- `AgentBuilder` specifically designed for Java agents
+- Subclassing, decoration, rebasement strategies
+- Built-in support for matching class hierarchies
+
+**Core strategies:**
+```
+subclass()   → Creates a NEW subclass (like runtime proxying)
+redefine()   → Replaces class bytecode entirely
+rebase()     → Copies original methods, replaces with advice-instrumented version
+               (originals renamed to synthetic methods — safest for agents)
+```
+
+**Method interception with ByteBuddy:**
+```java
+import net.bytebuddy.ByteBuddy;
+import net.bytebuddy.implementation.MethodDelegation;
+import net.bytebuddy.implementation.bind.annotation.*;
+import net.bytebuddy.matcher.ElementMatchers;
+import java.lang.reflect.Method;
+import java.util.concurrent.Callable;
+
+// --- 1. Simple subclass-based interception ---
+Class<? extends OrderService> proxyClass = new ByteBuddy()
+    .subclass(OrderService.class)
+    .method(ElementMatchers.named("placeOrder")
+        .and(ElementMatchers.takesArguments(Order.class)))
+    .intercept(MethodDelegation.to(TimingInterceptor.class))
+    .make()
+    .load(OrderService.class.getClassLoader())
+    .getLoaded();
+
+OrderService proxy = proxyClass.getDeclaredConstructor().newInstance();
+
+// --- 2. Interceptor class ---
+public class TimingInterceptor {
+
+    @RuntimeType  // return Object — Byte Buddy handles type adaptation
+    public static Object intercept(
+        @This Object self,                    // the proxy instance
+        @AllArguments Object[] args,          // all method arguments
+        @SuperCall Callable<?> superCall,     // call original method
+        @Origin Method method,                // reflected Method object
+        @Origin Class<?> declaringClass       // declaring class
+    ) throws Exception {
+        long start = System.nanoTime();
+        try {
+            Object result = superCall.call();
+            return result;
+        } finally {
+            long elapsed = System.nanoTime() - start;
+            System.out.printf("[%s] %s took %dns%n",
+                declaringClass.getSimpleName(), method.getName(), elapsed);
+        }
+    }
+}
+```
+
+**`AgentBuilder` — the right way to write agents:**
+```java
+public class OpenTelemetryStyleAgent {
+
+    public static void premain(String args, Instrumentation inst) {
+        new AgentBuilder.Default()
+            // Ignore JDK internals and agent itself
+            .ignore(nameStartsWith("java.")
+                .or(nameStartsWith("sun."))
+                .or(nameStartsWith("com.example.agent.")))
+
+            // Match target classes
+            .type(
+                hasSuperType(named("javax.servlet.http.HttpServlet"))
+                    .or(nameStartsWith("com.example.service."))
+            )
+
+            // Apply advice
+            .transform((builder, typeDescription, classLoader, module, domain) ->
+                builder
+                    .method(isPublic().and(not(isStatic())))
+                    .intercept(Advice.to(UniversalTimingAdvice.class))
+            )
+
+            // Listener for debugging
+            .with(AgentBuilder.Listener.StreamWriting.toSystemError()
+                .withTransformationsOnly())
+
+            .installOn(inst);
+    }
+}
+
+// --- Advice class — compiled into target class bytecode (no proxy overhead!) ---
+public class UniversalTimingAdvice {
+
+    @Advice.OnMethodEnter
+    public static long onEnter(
+        @Advice.Origin String methodSignature
+    ) {
+        System.out.println("Entering: " + methodSignature);
+        return System.nanoTime();
+    }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    public static void onExit(
+        @Advice.Origin String methodSignature,
+        @Advice.Enter long startTime,         // value from @OnMethodEnter
+        @Advice.Return(readOnly = false) Object returnValue,
+        @Advice.Thrown Throwable thrown
+    ) {
+        long elapsed = System.nanoTime() - startTime;
+        if (thrown != null) {
+            System.out.printf("ERROR %s after %dns: %s%n",
+                methodSignature, elapsed, thrown.getMessage());
+        } else {
+            System.out.printf("EXIT %s after %dns%n", methodSignature, elapsed);
+        }
+    }
+}
+```
+
+**`Advice` vs `MethodDelegation` — critical distinction:**
+```
+MethodDelegation:
+  → Creates a proxy/subclass; calls delegate at runtime
+  → Overhead: method call per invocation
+  → Flexible: full Java logic in interceptor
+
+Advice:
+  → Inlines advice bytecode DIRECTLY into target method
+  → Zero proxy overhead — as if you wrote the code there
+  → Restrictions: cannot use non-static state easily
+  → Preferred for performance-sensitive agent instrumentation
+```
+
+**Byte Buddy element matchers:**
+```java
+// Class matchers
+named("com.example.OrderService")
+nameStartsWith("com.example.")
+hasSuperType(named("com.example.BaseService"))
+isAnnotatedWith(named("org.springframework.stereotype.Service"))
+isInterface()
+isAbstract()
+not(isSynthetic())
+
+// Method matchers
+named("placeOrder")
+takesArguments(Order.class)
+returns(named("java.util.List"))
+isPublic().and(not(isStatic()))
+isAnnotatedWith(Transactional.class)
+isOverriddenFrom(named("com.example.BaseService"))
+```
+
+**Common pitfalls:**
+- Using `MethodDelegation` where `Advice` gives zero-overhead inlining
+- Forgetting `.ignore()` for JDK internals → instrumentation loops or errors
+- `@SuperCall` not available in interface default methods → use `@DefaultCall`
+- Advice class must be on bootstrap or agent classpath — not app classpath
+
+---
+
+### 3.8 AOP Instrumentation
+
+**AOP concepts mapped to instrumentation:**
+```
+AOP Term          Instrumentation Equivalent
+──────────────    ──────────────────────────
+Aspect            ClassFileTransformer / AgentBuilder transform
+Pointcut          ElementMatcher (which classes/methods)
+Advice            @OnMethodEnter / @OnMethodExit / interceptor
+Join Point        Method call, field access, constructor
+Weaving           Bytecode transformation at load/build/runtime
+```
+
+**Spring AOP vs ByteBuddy agent — comparison:**
+```
+                Spring AOP              ByteBuddy Agent
+Mechanism:      JDK/CGLIB proxy         Direct bytecode modification
+Scope:          Spring beans only       Any class (including JDK)
+Overhead:       Proxy method call       Zero (Advice) or one call (Delegation)
+Configuration:  @Aspect annotations     Code / config
+Requires Spring:Yes                     No
+Instruments:    Public methods only     Any method
+```
+
+**AspectJ (compile-time weaving) — most powerful AOP:**
+```java
+// AspectJ aspect — woven at compile time into class files
+@Aspect
+public class SecurityAspect {
+
+    // Pointcut: any method annotated with @Secured
+    @Pointcut("@annotation(com.example.Secured)")
+    public void securedMethod() {}
+
+    // Around advice — most powerful; controls invocation
+    @Around("securedMethod()")
+    public Object checkSecurity(ProceedingJoinPoint pjp) throws Throwable {
+        String user = SecurityContext.getCurrentUser();
+        if (user == null) throw new SecurityException("Not authenticated");
+
+        System.out.println("User " + user + " calling " + pjp.getSignature());
+        Object result = pjp.proceed(); // invoke original
+        System.out.println("Call completed successfully");
+        return result;
+    }
+
+    // Before advice
+    @Before("execution(* com.example..*Service.*(..))")
+    public void logEntry(JoinPoint jp) {
+        System.out.println("Entering: " + jp.getSignature().toShortString());
+    }
+
+    // After returning
+    @AfterReturning(pointcut = "execution(* com.example..*(..))",
+                    returning = "result")
+    public void logReturn(JoinPoint jp, Object result) {
+        System.out.println("Returned: " + result);
+    }
+
+    // After throwing
+    @AfterThrowing(pointcut = "execution(* com.example..*(..))",
+                   throwing = "ex")
+    public void logException(JoinPoint jp, Exception ex) {
+        System.err.println("Exception in " + jp.getSignature() + ": " + ex);
+    }
+}
+```
+
+**AspectJ weaving modes:**
+```
+Compile-time (ajc):    Source → AspectJ compiler → Woven .class files
+Post-compile (ajc -inpath): Existing .class → re-woven .class files
+Load-time (LTW):       -javaagent:aspectjweaver.jar → weaves at ClassLoader
+```
+
+---
+
+### 3.9 Build-time vs Load-time vs Runtime Instrumentation
+
+**Build-time instrumentation:**
+```
+Source → [build plugin] → Original .class → [ASM/Javassist/AspectJ] → Instrumented .class → JAR
+```
+
+```xml
+<!-- Maven: Jacoco build-time instrumentation -->
+<plugin>
+    <groupId>org.jacoco</groupId>
+    <artifactId>jacoco-maven-plugin</artifactId>
+    <executions>
+        <execution>
+            <goals><goal>prepare-agent</goal></goals>
+        </execution>
+        <execution>
+            <id>report</id>
+            <phase>test</phase>
+            <goals><goal>report</goal></goals>
+        </execution>
+    </executions>
+</plugin>
+```
+
+```kotlin
+// Gradle: custom build-time transform (Android Transform API style)
+tasks.register<TransformTask>("instrumentClasses") {
+    inputDir = layout.buildDirectory.dir("classes")
+    outputDir = layout.buildDirectory.dir("instrumented-classes")
+    doLast {
+        // Run ASM transformer over all .class files
+        inputDir.get().asFileTree.matching { include("**/*.class") }.forEach { classFile ->
+            val original = classFile.readBytes()
+            val instrumented = MyTransformer.transform(original)
+            val outputFile = outputDir.get().file(
+                inputDir.get().asFile.toPath().relativize(classFile.toPath()).toString()
+            )
+            outputFile.asFile.writeBytes(instrumented)
+        }
+    }
+}
+```
+
+**Pros/cons comparison:**
+```
+BUILD-TIME:
+  ✓ Zero runtime overhead setup
+  ✓ Errors caught at build time
+  ✗ Requires build system integration
+  ✗ Cannot instrument third-party JARs easily
+  Use: test coverage, performance-sensitive instrumentation
+
+LOAD-TIME (Java agent):
+  ✓ Instruments third-party code
+  ✓ No source/build changes needed
+  ✓ Can be toggled at startup
+  ✗ Startup overhead
+  ✗ -javaagent flag required
+  Use: APM agents, security agents, tracing
+
+RUNTIME:
+  ✓ Attach without restart (dynamic agents)
+  ✓ Toggle instrumentation on/off
+  ✗ Cannot instrument JDK bootstrap classes easily
+  ✗ Limited transformations after class is in use
+  Use: Profilers, debuggers, live diagnostics
+```
+
+---
+
+### 3.10 Profiling & Monitoring Agents
+
+**Building a minimal profiling agent:**
+```java
+public class SamplingProfilerAgent {
+
+    private static final ScheduledExecutorService scheduler =
+        Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "profiler-sampler");
+            t.setDaemon(true);
+            return t;
+        });
+
+    public static void premain(String args, Instrumentation inst) {
+        int intervalMs = parseInterval(args, 10); // default 10ms
+
+        scheduler.scheduleAtFixedRate(() -> {
+            Map<Thread, StackTraceElement[]> traces =
+                Thread.getAllStackTraces();
+
+            traces.forEach((thread, stack) -> {
+                if (thread.getState() == Thread.State.RUNNABLE
+                        && stack.length > 0) {
+                    // Record: top of stack = hot method
+                    StackTraceElement frame = stack[0];
+                    MethodProfile.record(
+                        frame.getClassName() + "." + frame.getMethodName()
+                    );
+                }
+            });
+        }, 0, intervalMs, TimeUnit.MILLISECONDS);
+
+        // Dump on JVM shutdown
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            MethodProfile.dump(System.out);
+        }));
+    }
+}
+
+// Lock-free concurrent counter map
+class MethodProfile {
+    private static final ConcurrentHashMap<String, LongAdder> counts =
+        new ConcurrentHashMap<>();
+
+    static void record(String method) {
+        counts.computeIfAbsent(method, k -> new LongAdder()).increment();
+    }
+
+    static void dump(PrintStream out) {
+        counts.entrySet().stream()
+            .sorted(Map.Entry.<String, LongAdder>comparingByValue(
+                Comparator.comparingLong(LongAdder::sum)).reversed())
+            .limit(20)
+            .forEach(e -> out.printf("%,8d  %s%n", e.getValue().sum(), e.getKey()));
+    }
+}
+```
+
+**OpenTelemetry Java agent architecture:**
+```
+OpenTelemetry Java Agent (otel-javaagent.jar)
+  │
+  ├── AgentBuilder (ByteBuddy)
+  │     ├── HttpServlet instrumentation
+  │     ├── JDBC instrumentation (intercepts Connection, Statement)
+  │     ├── gRPC instrumentation
+  │     ├── Spring MVC instrumentation
+  │     └── 100+ more instrumentations
+  │
+  ├── SDK (Tracer, MeterProvider, LoggerProvider)
+  │     └── Exporters: OTLP, Jaeger, Zipkin, Prometheus
+  │
+  └── Auto-configuration (system properties / env vars)
+        -Dotel.service.name=my-service
+        -Dotel.traces.exporter=otlp
+        -Dotel.exporter.otlp.endpoint=http://collector:4317
+```
+
+```java
+// Custom OpenTelemetry instrumentation module
+// Instruments a hypothetical MyHttpClient
+public class MyHttpClientInstrumentation implements TypeInstrumentation {
+
+    @Override
+    public ElementMatcher<TypeDescription> typeMatcher() {
+        return named("com.example.MyHttpClient");
+    }
+
+    @Override
+    public void transform(TypeTransformer transformer) {
+        transformer.applyAdviceToMethod(
+            named("execute").and(takesArgument(0, named("com.example.Request"))),
+            MyHttpClientInstrumentation.class.getName() + "$ExecuteAdvice"
+        );
+    }
+
+    public static class ExecuteAdvice {
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void onEnter(
+            @Advice.Argument(0) Object request,
+            @Advice.Local("otelSpan") Span span,
+            @Advice.Local("otelScope") Scope scope
+        ) {
+            Tracer tracer = GlobalOpenTelemetry.getTracer("my-instrumentation");
+            span = tracer.spanBuilder("HTTP " + getMethod(request))
+                .setSpanKind(SpanKind.CLIENT)
+                .startSpan();
+            scope = span.makeCurrent();
+        }
+
+        @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
+        public static void onExit(
+            @Advice.Thrown Throwable thrown,
+            @Advice.Local("otelSpan") Span span,
+            @Advice.Local("otelScope") Scope scope
+        ) {
+            if (thrown != null) span.recordException(thrown);
+            scope.close();
+            span.end();
+        }
+    }
+}
+```
+
+---
+
+## 4. Interview Questions & Expert Answers
+
+**Q1: What is the difference between `premain` and `agentmain`?**
+
+**A:** `premain` is the entry point for statically attached agents — loaded before `main()` via `-javaagent:agent.jar`. All classes go through the transformer before being used. `agentmain` is for dynamically attached agents using the Attach API, connecting to an already-running JVM. Dynamic attachment requires explicitly calling `retransformClasses()` for already-loaded classes because the transformer only applies to classes loaded after registration. `agentmain` requires `Agent-Class` in manifest vs `Premain-Class` for `premain`.
+
+---
+
+**Q2: What is the difference between `retransformClasses()` and `redefineClasses()`?**
+
+**A:** Both modify bytecode of loaded classes, but differ in mechanism: `retransformClasses()` runs all registered retransformable `ClassFileTransformer`s on the original bytecode — useful for toggling instrumentation. `redefineClasses()` directly replaces bytecode, bypassing the transformer chain — lower-level, used by debuggers for hot-swap. Both have the same structural restriction: cannot add/remove methods, fields, or change the class hierarchy after the class has been loaded. `retransformClasses()` requires `Can-Retransform-Classes: true` and transformers registered with `canRetransform=true`.
+
+---
+
+**Q3: Why is ASM's `COMPUTE_FRAMES` important, and what is a stack map frame?**
+
+**A:** Java 7+ requires stack map frames in class files — metadata at branch targets and exception handlers declaring what types are on the operand stack and in local variables. The JVM verifier uses them for fast bytecode verification. When you add, remove, or reorder instructions (especially branches), existing frames become invalid. `COMPUTE_FRAMES` instructs ASM to discard existing frames and recompute correct ones — slower but essential for correctness. Without it, modified bytecode often fails with `VerifyError`. Trade-off: `COMPUTE_FRAMES` requires `EXPAND_FRAMES` on the reader side, and triggers class loading during frame computation (getCommonSuperClass), which can cause issues in agents before classes are available.
+
+---
+
+**Q4: Explain Byte Buddy's `Advice` vs `MethodDelegation` — when would you use each?**
+
+**A:** `MethodDelegation` creates a proxy/subclass where instrumented methods delegate to an interceptor object at runtime — flexible but has method call overhead per invocation. `Advice` copies the advice method's bytecode directly into the target method at transformation time — zero runtime overhead (equivalent to writing the code inline). `Advice` is preferred for performance-sensitive agent instrumentation (APM, tracing). `MethodDelegation` is better for complex, stateful interception (like Mockito's mock objects where you need rich interceptor state and runtime polymorphism). `Advice` has restrictions: advice methods must be static, and shared state requires `ThreadLocal` or `@Advice.Local`.
+
+---
+
+**Q5: How do you avoid classpath conflicts between an agent and the instrumented application?**
+
+**A:** Multiple strategies: (1) Shade/relocate agent dependencies — rename packages to avoid conflicts (e.g., `org.objectweb.asm` → `com.myagent.shaded.asm`). (2) Bootstrap classpath — load agent classes into the bootstrap classloader (`appendToBootstrapClassLoaderSearch`) so they're isolated above the application. (3) Separate classloader — load agent internals in a dedicated classloader; only expose minimal API via shared bootstrap classes. (4) Byte Buddy handles this: `AgentBuilder.Default` automatically injects helper classes into the correct classloader. Most production agents (OpenTelemetry, Datadog) combine shading with bootstrap injection.
+
+---
+
+**Q6: How does Jacoco instrument code for coverage, and what are the limitations?**
+
+**A:** Jacoco inserts a `boolean[]` probe array into each class, with probes at each branch and line. At coverage-interesting points (line start, branch outcomes), it sets `probes[N] = true`. On JVM shutdown (or test completion), it reads the probe arrays to build coverage reports. Limitations: (1) Does not work with classes that don't load through standard ClassLoader (OSGi bundles, isolated classloaders need special config). (2) Offline instrumentation (build-time) required for Java agents testing themselves. (3) Doesn't measure branch coverage inside lambda bodies accurately in older versions. (4) Cannot distinguish code executed in different test cases without additional tooling (per-test coverage).
+
+---
+
+**Q7: What is the safepoint bias problem in profilers, and how does async-profiler solve it?**
+
+**A:** Traditional JVM profilers using JVMTI's `GetStackTrace` can only sample threads at safepoints — JVM-controlled checkpoints where the thread state is known (method entry/exit, back edges of loops). Code in tight loops without safepoints (e.g., `for (int i = 0; i < N; i++) compute()`) may never be sampled, making the loop's CPU cost invisible. async-profiler avoids this by using `SIGPROF` Unix signals to interrupt threads at arbitrary points and calling `AsyncGetCallTrace` (an unofficial but widely-used JVM API) which works without safepoints. This produces accurate flame graphs that correctly represent where CPU time is actually spent.
+
+---
+
+**Q8: Can you add fields to a class during retransformation? What are the limits?**
+
+**A:** No. The JVM specification restricts retransformation and redefinition to changes that don't alter the class schema: you cannot add/remove fields, add/remove methods, change method signatures, change the superclass, or add/remove interfaces. You can change method body bytecode, change constant values, and add/remove attributes. These restrictions exist because existing instances of the class are in memory with fixed field offsets — adding fields would require relocating all existing instances. Workarounds: use `ThreadLocal` or external `WeakHashMap<Object, State>` (identity-keyed) to attach state to existing instances without modifying the class schema.
+
+---
+
+**Q9: How does Spring AOP differ from AspectJ, and when would you choose each?**
+
+**A:** Spring AOP uses JDK dynamic proxies (for interfaces) or CGLIB subclass proxies (for classes) at runtime — instrumentation happens when the Spring bean is retrieved from the container. It only intercepts public methods of Spring-managed beans and only works within the Spring context (self-invocation `this.method()` bypasses the proxy). AspectJ (compile-time or load-time weaving) modifies bytecode directly — it works on any class (not just Spring beans), can intercept private methods, constructors, field access, and handles self-invocation correctly because the advice is woven into the bytecode. Choose Spring AOP for simple cross-cutting concerns on Spring beans (logging, transaction, security). Choose AspectJ for: non-Spring code, private method interception, self-invocation scenarios, maximum performance (no proxy overhead), or complex pointcut expressions.
+
+---
+
+**Q10: How do you write a ClassFileTransformer that handles exceptions safely?**
+
+**A:** (1) Always wrap the entire transformer body in try-catch — any uncaught exception from a transformer causes the class load to fail with `ClassFormatError` or similar. (2) Return `null` (not the original bytes) to indicate "no change" — returning `null` vs original bytes has the same effect but `null` is the documented signal. (3) Return the original bytes on error (defensive): the class loads normally. (4) Log the error with enough context (class name, exception type) for diagnosis. (5) Never let errors in one class's transformation prevent others from loading. (6) Be careful with `ClassWriter.getCommonSuperClass()` — it triggers class loading inside the transformer, which can deadlock if the ClassLoader is not reentrant.
+
+---
+
+**Q11: Explain how method interception works with Byte Buddy's `Advice` in terms of bytecode.**
+
+**A:** When `Advice.to(MyAdvice.class)` is applied, Byte Buddy reads the `@OnMethodEnter` and `@OnMethodExit` methods of `MyAdvice` and inlines their bytecode into the beginning and end of each matched target method. `@Advice.Local` variables become new local variable slots in the target method. `@Advice.Enter` in `@OnMethodExit` refers to the return value of `@OnMethodEnter`, stored in a local variable between entry and exit. `@Advice.Return` with `readOnly=false` allows modifying the return value by adjusting the local variable that holds it before the return instruction. The advice class itself is never instantiated — it's purely a template for bytecode inlining. This is why advice methods must be static.
+
+---
+
+**Q12: What is bootstrap classpath injection and why is it needed?**
+
+**A:** When an agent adds helper classes to the target (e.g., a `Tracer` class that instrumented code calls), those helper classes must be visible to the instrumented code's classloader. If the instrumented class is loaded by the bootstrap classloader (e.g., `java.net.Socket`), normal agent classpath won't work — bootstrap classes only see bootstrap classpath. Solution: `inst.appendToBootstrapClassLoaderSearch(jarFile)` adds a JAR to the bootstrap classloader's classpath. Byte Buddy's `AgentBuilder` handles this automatically via `installBootstrapInjection()`. Shared helper classes (like the `Tracer` interface) go on bootstrap; agent internals stay in agent classloader.
+
+---
+
+**Q13: How would you implement a RASP (Runtime Application Self-Protection) agent?**
+
+**A:** A RASP agent instruments security-sensitive methods at load time — SQL execution (`PreparedStatement.execute`), file system access (`FileInputStream.<init>`), process execution (`Runtime.exec`), deserialization (`ObjectInputStream.readObject`), and reflection (`Class.forName`). Before each such call, the instrumented advice inspects arguments and current call stack to determine whether the call is expected/safe. For example: SQL calls from `PreparedStatement` are generally safe; SQL calls from string concatenation are suspicious (SQLi). Key challenges: (1) Must instrument JDK classes → requires bootstrap classpath injection. (2) Advice must be very fast — added to every such call. (3) False positive avoidance — must understand application context. (4) Must handle `retransformClasses` for already-loaded JDK classes.
+
+---
+
+**Q14: What causes a `VerifyError` after bytecode instrumentation and how do you diagnose it?**
+
+**A:** `VerifyError` means the JVM verifier rejected the bytecode as structurally invalid. Common causes: (1) Invalid stack map frames — use `COMPUTE_FRAMES` in ASM or equivalent. (2) Operand stack imbalance — pushed more/fewer values than expected. (3) Type mismatch on stack — e.g., pushing `int` where reference expected. (4) Invalid local variable index. (5) Inconsistent frame state across branch paths. Diagnosis: (a) Run with `-XX:+VerifyHardCoded` or `-Xverify:all`. (b) Use `javap -c -verbose` on the instrumented class to inspect bytecode. (c) Use ASM's `CheckClassAdapter` to verify before writing: wrap `ClassWriter` with `CheckClassAdapter` during development. (d) Use ASM `TraceClassVisitor` to print human-readable bytecode for inspection.
+
+---
+
+**Q15: How does the OpenTelemetry Java agent achieve zero code changes across 100+ frameworks?**
+
+**A:** It uses a `premain` Java agent with Byte Buddy `AgentBuilder`. Each framework has a dedicated `TypeInstrumentation` implementation that: (1) Declares a `typeMatcher()` for relevant classes (e.g., `hasSuperType(named("javax.servlet.http.HttpServlet"))`). (2) Declares method matchers and applies `Advice` classes that create/close spans, propagate context, and record attributes. (3) Framework-specific `InstrumentationModule`s bundle related instrumentations. The agent auto-discovers all modules via ServiceLoader. Helper classes (span wrappers, context propagators) are injected into the right classloader. The Advice inlining ensures zero proxy overhead — just a few nanoseconds of overhead per instrumented call, making it production-safe.
+
+---
+
+## 5. Advanced / Senior-Level Considerations
+
+**Instrumentation and class loading deadlocks:**
+```
+ClassLoader lock (CL-A) + transformer tries to load class via CL-B
+CL-B is waiting for CL-A to finish → deadlock
+Fix: Defer class loading in transformers; use bootstrap classpath
+```
+
+**Retransformation ordering:**
+- Transformers execute in registration order
+- On retransform, they receive ORIGINAL bytecode — not previously transformed bytes
+- Chain: `original → T1(original) → T2(T1_result) → final`
+- But on retransform: `original → T1(original) → T2(T1_result)`... same as first time
+
+**Performance impact of instrumentation:**
+```
+JVMTI method entry/exit events: 10–30% overhead (avoid in production)
+ASM Advice (inlined):           <5ns overhead per method call (production-safe)
+ByteBuddy MethodDelegation:     ~100–300ns (virtual call + reflection)
+Spring AOP proxy:               ~200–500ns (proxy method call)
+```
+
+**Module system (Java 9+ modules) complications:**
+```java
+// Agents need --add-opens to instrument module-private classes
+// Can be done programmatically in premain:
+Instrumentation inst; // from premain
+// ByteBuddy handles this automatically in Java 9+ via:
+ByteBuddyAgent.getInstrumentation().redefineModule(...)
+// Manual:
+inst.redefineModule(
+    module,
+    Set.of(),        // reads
+    Map.of(),        // exports
+    Map.of(),        // opens — key: package, value: modules to open to
+    Set.of(),
+    Map.of()
+);
+```
+
+**Distributed tracing context propagation:**
+```
+Thread A creates Span → stores in ThreadLocal Context
+Thread A submits task to ThreadPoolExecutor
+Thread B executes task → ThreadLocal is EMPTY → trace context lost
+
+Fix: Instrument ExecutorService to capture and restore context:
+Runnable wrapped = () -> {
+    try (Scope s = context.makeCurrent()) { // restore context
+        original.run();
+    }
+};
+// OpenTelemetry's ContextPropagators and Java agent do this automatically
+```
+
+---
+
+## 6. Summary / Cheat Sheet
+
+```
+INSTRUMENTATION WINDOWS
+├── Build-time:   Transform .class files in CI (AspectJ, custom ASM plugins)
+├── Load-time:    Java agent + ClassFileTransformer (most common for APM)
+└── Runtime:      Dynamic attach + retransformClasses (profilers, debuggers)
+
+JAVA AGENT
+├── premain()     → static attach (-javaagent flag), before main()
+├── agentmain()   → dynamic attach (Attach API), to running JVM
+├── Manifest:     Premain-Class, Can-Retransform-Classes: true
+└── Instrumentation → addTransformer(), retransformClasses(), getObjectSize()
+
+BYTECODE LIBRARIES
+├── ASM           → low-level, fastest, Visitor pattern, used by everyone internally
+│                   COMPUTE_FRAMES essential; Core API (streaming) vs Tree API
+├── Javassist     → source-string API, cc.detach() or memory leak, prototype-friendly
+└── ByteBuddy     → type-safe, fluent, best for agents; Advice=inline, Delegation=proxy
+
+BYTEBUDDY KEY PATTERNS
+├── AgentBuilder  → production agent instrumentation
+├── Advice        → zero-overhead inlining (@OnMethodEnter, @OnMethodExit)
+├── Delegation    → runtime proxy (Mockito-style)
+├── ElementMatcher→ hasSuperType, isAnnotatedWith, nameStartsWith
+└── Strategies    → subclass (new class), rebase (safest for agents), redefine
+
+RETRANSFORM LIMITS
+├── CANNOT: add/remove fields, add/remove methods, change signatures
+├── CAN:    change method bodies, constants, attributes
+└── Workaround for state: ThreadLocal or WeakHashMap keyed by instance
+
+SAFETY RULES
+├── Transformer: always try-catch, return null on no-change
+├── CheckClassAdapter: wrap ClassWriter in dev to validate bytecode
+├── VerifyError: missing COMPUTE_FRAMES, stack imbalance, type mismatch
+├── Bootstrap injection: for instrumenting JDK/bootstrap-loaded classes
+└── Shade dependencies: avoid classpath conflicts with application
+
+AOP HIERARCHY (most to least powerful)
+  AspectJ CTW → AspectJ LTW → ByteBuddy Agent → Spring AOP
+  (any class)   (any class)   (any class)        (Spring beans, public methods)
+
+PROFILER ARCHITECTURE
+├── Sampling: Thread.getAllStackTraces() every N ms (simple, safepoint bias)
+├── JVMTI events: MethodEntry/Exit (accurate, expensive ~20% overhead)
+├── async-profiler: AsyncGetCallTrace + SIGPROF (no safepoint bias, <3%)
+└── JFR: built-in, <1% overhead, production-safe, always-on
+
+KEY APIs
+  Instrumentation.addTransformer(ClassFileTransformer, boolean canRetransform)
+  Instrumentation.retransformClasses(Class<?>...)
+  ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS
+  @Advice.OnMethodEnter / @Advice.OnMethodExit
+  AgentBuilder.Default().type(matcher).transform(...).installOn(inst)
+```
+
+# Java Observability — Senior Developer Study Notes
+
+---
+
+## 1. Topic Overview
+
+**Observability** is the ability to infer the internal state of a system from its external outputs. For Java systems, it means understanding what the JVM and application are doing at any point — in production, under load, during incidents.
+
+The three pillars are:
+- **Logs** — discrete events
+- **Metrics** — aggregated measurements over time
+- **Traces** — causal chains across service boundaries
+
+**Why it matters for senior engineers:**
+- You can't debug what you can't see
+- Distributed microservices multiply failure modes exponentially
+- SLAs/SLOs are meaningless without measurement
+- Mean Time to Detect (MTTD) and Mean Time to Resolve (MTTR) are directly tied to observability maturity
+
+**Real-world scenarios:**
+- P99 latency spike on a Tuesday — metrics surface it, traces pinpoint the slow DB call, logs reveal the bad query
+- Memory leak in production — JFR + heap dump analysis identifies the leaking object graph
+- Cascading failure in microservices — distributed traces show exactly where the chain broke
+
+---
+
+## 2. Core Concepts
+
+```
+┌─────────────────────────────────────────────────┐
+│                  YOUR APPLICATION                │
+│                                                 │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
+│  │  Logs    │  │ Metrics  │  │   Traces     │  │
+│  └────┬─────┘  └────┬─────┘  └──────┬───────┘  │
+└───────┼─────────────┼───────────────┼───────────┘
+        │             │               │
+        ▼             ▼               ▼
+   ELK/Loki      Prometheus      Jaeger/Zipkin
+                 /Grafana         /Tempo
+```
+
+**Observability vs Monitoring:**
+- Monitoring = watching known unknowns (predefined dashboards/alerts)
+- Observability = exploring unknown unknowns (ad-hoc queries on rich telemetry)
+
+**Key Principles:**
+- Cardinality: high-cardinality data (user IDs, trace IDs) belongs in logs/traces, not metric labels
+- Sampling: traces can be sampled; logs/metrics usually not
+- Correlation: link logs ↔ traces via `traceId`/`spanId` injected into MDC
+
+---
+
+## 3. Subtopics Breakdown
+
+---
+
+### 3.1 Observability Principles
+
+**The Three Pillars + the emerging fourth:**
+| Pillar | Tool examples | Cardinality | Cost |
+|--------|--------------|-------------|------|
+| Logs | Logback, Log4j2 | Unbounded | High storage |
+| Metrics | Micrometer, JMX | Low (bounded labels) | Low |
+| Traces | OpenTelemetry, Sleuth | Medium | Medium |
+| Profiles | JFR, async-profiler | N/A | Low overhead |
+
+**The Golden Signals (Google SRE):**
+1. **Latency** — time to serve a request
+2. **Traffic** — requests per second
+3. **Errors** — error rate
+4. **Saturation** — how "full" the system is (CPU, heap, thread pool)
+
+**USE Method (for resources):**
+- Utilization, Saturation, Errors
+
+**RED Method (for services):**
+- Rate, Errors, Duration
+
+**Key Details:**
+- Design for observability at architecture time, not as an afterthought
+- Every async boundary (queue, thread pool, reactive pipeline) must propagate context
+- Structured data > free-text log strings
+- Never log PII; use masking/tokenization
+
+---
+
+### 3.2 Logging Architecture
+
+**Conceptual flow:**
+```
+App Thread → Logger → Appender → (async queue) → Sink (file/socket)
+                                                        │
+                                                   Log Shipper
+                                                   (Filebeat/Fluentd)
+                                                        │
+                                                   Aggregation
+                                                   (Elasticsearch/Loki)
+                                                        │
+                                                   Query/Alert
+                                                   (Kibana/Grafana)
+```
+
+**Log Levels — when to use each:**
+| Level | Use case |
+|-------|----------|
+| TRACE | Fine-grained flow (dev only, never production) |
+| DEBUG | Diagnostic detail (disabled in prod by default) |
+| INFO | Business events, startup/shutdown, state transitions |
+| WARN | Recoverable problems, degraded behavior |
+| ERROR | Failures requiring attention; always include exception |
+
+**Key Details:**
+- Log levels are hierarchical: setting WARN enables WARN + ERROR only
+- Use parameterized logging — never string concatenation:
+```java
+// BAD — string built even if DEBUG disabled
+log.debug("User: " + userId + " accessed: " + resource);
+
+// GOOD — string only built if DEBUG enabled
+log.debug("User: {} accessed: {}", userId, resource);
+```
+- Async logging is critical for performance (AsyncAppender / AsyncLogger)
+- Log rotation and retention policies belong in ops runbooks
+
+**Common Pitfalls:**
+- Logging in tight loops (millions of log events = GC pressure)
+- Swallowing exceptions silently: `catch(Exception e) { log.error("failed"); }` — always log `e`
+- Logging sensitive data (passwords, tokens, PII)
+- Not configuring async appender — synchronous I/O on the request thread
+
+---
+
+### 3.3 SLF4J Ecosystem
+
+SLF4J (Simple Logging Facade for Java) is the standard API layer — it decouples your code from the logging implementation.
+
+```
+Your Code → SLF4J API → [Binding] → Logback / Log4j2 / JUL
+```
+
+**Key components:**
+- `slf4j-api` — the interface
+- `logback-classic` — native SLF4J implementation (recommended)
+- `log4j-slf4j-impl` — Log4j2 binding
+- `slf4j-jdk14` — JUL (java.util.logging) binding
+- Bridging: `jcl-over-slf4j`, `log4j-over-slf4j` redirect legacy frameworks into SLF4J
+
+```java
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class OrderService {
+    // Best practice: static final, named after the class
+    private static final Logger log = LoggerFactory.getLogger(OrderService.class);
+
+    public void processOrder(String orderId) {
+        log.info("Processing order id={}", orderId);
+        try {
+            // ...
+        } catch (PaymentException e) {
+            log.error("Payment failed for order id={}", orderId, e); // pass throwable last
+        }
+    }
+}
+```
+
+**MDC (Mapped Diagnostic Context):**
+```java
+// Put correlation data into thread-local MDC
+MDC.put("traceId", traceId);
+MDC.put("userId", userId);
+MDC.put("requestId", requestId);
+
+try {
+    log.info("Handling request"); // every log line now includes traceId, userId, requestId
+    service.process();
+} finally {
+    MDC.clear(); // CRITICAL — prevents MDC leaks in thread pool scenarios
+}
+```
+
+MDC in `logback.xml` pattern:
+```xml
+<pattern>%d{ISO8601} %-5level [%X{traceId}] [%X{userId}] %logger{36} - %msg%n</pattern>
+```
+
+**Common Pitfalls:**
+- Multiple SLF4J bindings on classpath → `SLF4J: Class path contains multiple SLF4J bindings` warning and non-deterministic binding
+- Forgetting `MDC.clear()` in thread pools — context leaks into next request
+- Using `LoggerFactory.getLogger(getClass())` in non-static context — creates one logger per instance
+
+---
+
+### 3.4 Log4j2 / Logback
+
+#### Logback
+
+The default in Spring Boot. Three modules: `logback-core`, `logback-classic`, `logback-access`.
+
+```xml
+<!-- logback-spring.xml (preferred in Spring Boot) -->
+<configuration>
+  <springProfile name="production">
+    <appender name="ASYNC_JSON" class="ch.qos.logback.classic.AsyncAppender">
+      <queueSize>10000</queueSize>
+      <discardingThreshold>0</discardingThreshold> <!-- 0 = never discard -->
+      <neverBlock>false</neverBlock>
+      <appender-ref ref="JSON_FILE"/>
+    </appender>
+  </springProfile>
+
+  <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>/var/log/app/application.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>/var/log/app/application.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+      <maxFileSize>100MB</maxFileSize>
+      <maxHistory>30</maxHistory>
+      <totalSizeCap>3GB</totalSizeCap>
+    </rollingPolicy>
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
+  </appender>
+</configuration>
+```
+
+#### Log4j2
+
+More performant than Logback, especially with Async Loggers (LMAX Disruptor).
+
+```xml
+<!-- log4j2.xml -->
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="Console" target="SYSTEM_OUT">
+      <JsonTemplateLayout/>
+    </Console>
+    <RollingFile name="RollingFile" fileName="app.log"
+                 filePattern="app-%d{MM-dd-yy-HH}-%i.log.gz">
+      <JsonTemplateLayout/>
+      <Policies>
+        <TimeBasedTriggeringPolicy/>
+        <SizeBasedTriggeringPolicy size="100 MB"/>
+      </Policies>
+    </RollingFile>
+  </Appenders>
+  <Loggers>
+    <!-- Make ALL loggers async using LMAX Disruptor -->
+    <AsyncRoot level="info">
+      <AppenderRef ref="RollingFile"/>
+    </AsyncRoot>
+  </Loggers>
+</Configuration>
+```
+
+**Log4j2 vs Logback:**
+| Feature | Logback | Log4j2 |
+|---------|---------|--------|
+| Async | AsyncAppender (blocking queue) | Async Loggers (LMAX Disruptor, lock-free) |
+| Throughput | ~1M msgs/sec | ~18M msgs/sec (async) |
+| Config reload | Yes | Yes |
+| Spring Boot default | Yes | No (needs exclusion) |
+| Log4Shell (CVE-2021-44228) | Not affected | Affected (pre-2.17.1) |
+
+**Common Pitfalls:**
+- Log4Shell: never use Log4j2 < 2.17.1; always patch
+- `AsyncAppender` in Logback has a default `queueSize=256` — too small for burst traffic; size to your peak log rate
+
+---
+
+### 3.5 Structured Logging
+
+Log as machine-readable JSON, not human-readable strings. Every log event is a structured document.
+
+**Why:** Enables field-level queries in Elasticsearch/Loki (`level:ERROR AND service:order-service AND duration:>500`)
+
+```java
+// Using Logback + logstash-logback-encoder
+import net.logstash.logback.argument.StructuredArguments;
+import static net.logstash.logback.argument.StructuredArguments.*;
+
+log.info("Order processed",
+    kv("orderId", orderId),
+    kv("amount", amount),
+    kv("currency", currency),
+    kv("durationMs", duration)
+);
+```
+
+Output JSON:
+```json
+{
+  "@timestamp": "2024-01-15T10:30:00.000Z",
+  "level": "INFO",
+  "logger": "com.example.OrderService",
+  "message": "Order processed",
+  "orderId": "ORD-12345",
+  "amount": 99.99,
+  "currency": "USD",
+  "durationMs": 45,
+  "traceId": "abc123",
+  "spanId": "def456",
+  "service": "order-service",
+  "host": "prod-app-01"
+}
+```
+
+**Standard fields to always include:**
+- `timestamp` (ISO-8601, UTC)
+- `level`
+- `service` / `application`
+- `environment` (prod/staging)
+- `traceId` / `spanId` (from MDC, auto-injected by OpenTelemetry)
+- `host` / `pod` / `instance`
+- `version` (app version)
+
+**Key Details:**
+- `logstash-logback-encoder` is the standard for Logback JSON
+- Log4j2 has `JsonTemplateLayout` (replaces deprecated `JsonLayout`)
+- Keep message text human-readable; put structured data in fields
+- Avoid nesting — flat structures are more queryable
+
+---
+
+### 3.6 Log Aggregation
+
+**Architecture:**
+```
+[App Pod 1] ──┐
+[App Pod 2] ──┤── [Filebeat/Fluentd/Fluentbit] ──► [Kafka] ──► [Logstash] ──► [Elasticsearch]
+[App Pod 3] ──┘                                                                      │
+                                                                                 [Kibana]
+                                                                               (search/alert)
+```
+
+**ELK Stack (Elastic):**
+- Elasticsearch: inverted-index storage, full-text + structured queries
+- Logstash: ingestion pipeline (parse, enrich, filter, route)
+- Kibana: visualization, dashboards, alerting
+
+**Loki (Grafana):**
+- Does NOT index log content — only indexes labels (like Prometheus for logs)
+- Much cheaper storage than Elasticsearch
+- Queries via LogQL
+- Best when logs are already structured and you query by label + log stream
+
+**Fluentd / Fluent Bit:**
+- Fluent Bit: lightweight C-based log shipper (runs as DaemonSet in K8s)
+- Fluentd: heavier Ruby-based aggregator with rich plugin ecosystem
+
+**Key Details:**
+- In Kubernetes: don't write to files — log to stdout/stderr, let the container runtime handle it, and use a DaemonSet log shipper
+- Retention: hot (7 days) → warm (30 days) → cold (1 year) → delete
+- Index management: use ILM (Index Lifecycle Management) in Elasticsearch
+
+---
+
+### 3.7 Metrics Collection — Micrometer
+
+Micrometer is the "SLF4J of metrics" — vendor-neutral metrics facade that supports Prometheus, Datadog, New Relic, CloudWatch, etc.
+
+```java
+// Spring Boot auto-configures MeterRegistry
+@Service
+public class OrderService {
+
+    private final Counter orderCounter;
+    private final Timer orderTimer;
+    private final Gauge pendingOrdersGauge;
+    private final AtomicInteger pendingOrders = new AtomicInteger(0);
+
+    public OrderService(MeterRegistry registry) {
+        this.orderCounter = Counter.builder("orders.processed")
+            .description("Total orders processed")
+            .tag("status", "success")
+            .register(registry);
+
+        this.orderTimer = Timer.builder("orders.processing.duration")
+            .description("Order processing latency")
+            .publishPercentiles(0.5, 0.95, 0.99)  // client-side percentiles
+            .publishPercentileHistogram()            // for server-side aggregation
+            .register(registry);
+
+        this.pendingOrdersGauge = Gauge.builder("orders.pending", pendingOrders, AtomicInteger::get)
+            .description("Currently pending orders")
+            .register(registry);
+    }
+
+    public void processOrder(Order order) {
+        pendingOrders.incrementAndGet();
+        Timer.Sample sample = Timer.start();
+        try {
+            doProcess(order);
+            orderCounter.increment();
+        } finally {
+            sample.stop(orderTimer);
+            pendingOrders.decrementAndGet();
+        }
+    }
+}
+```
+
+**Meter types:**
+| Type | Description | Example |
+|------|-------------|---------|
+| Counter | Monotonically increasing | requests processed, errors |
+| Gauge | Point-in-time value | queue depth, active connections |
+| Timer | Duration + count | HTTP request latency |
+| DistributionSummary | Distribution of values | response sizes |
+| LongTaskTimer | Long-running tasks | batch job duration |
+
+**Tags / Labels — the key to dimensional metrics:**
+```java
+// Always use low-cardinality tags
+Counter.builder("http.requests")
+    .tag("method", request.getMethod())     // GET, POST — low cardinality ✓
+    .tag("status", String.valueOf(status))  // 200, 404, 500 — low cardinality ✓
+    .tag("uri", request.getPath())          // /api/orders — low cardinality ✓
+    // NEVER: .tag("userId", userId)        // millions of values — high cardinality ✗
+    .register(registry);
+```
+
+**Spring Boot Actuator auto-metrics:**
+- `jvm.memory.*`, `jvm.gc.*`, `jvm.threads.*`
+- `http.server.requests`
+- `process.cpu.usage`, `system.cpu.usage`
+- `hikaricp.connections.*` (connection pool)
+- `spring.kafka.consumer.*`, `spring.rabbitmq.*`
+
+**`application.yml` Prometheus config:**
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus, metrics
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5, 0.95, 0.99
+```
+
+---
+
+### 3.8 Distributed Tracing
+
+A trace = one end-to-end request. Spans = individual operations within a trace.
+
+```
+TraceId: abc123
+│
+├── Span: api-gateway (5ms)
+│
+├── Span: order-service (120ms)
+│   ├── Span: validate-order (10ms)
+│   ├── Span: db.query orders (45ms)
+│   └── Span: payment-service HTTP call (60ms)
+│       ├── Span: payment-service handler (55ms)
+│       │   └── Span: db.query payments (30ms)
+│
+└── Span: notification-service async (80ms)
+```
+
+**W3C TraceContext propagation (HTTP headers):**
+```
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+             ^^ version  ^^ traceId (128-bit)              ^^ spanId  ^^ flags
+```
+
+**OpenTelemetry Java — manual instrumentation:**
+```java
+// Get tracer from global OpenTelemetry instance
+Tracer tracer = GlobalOpenTelemetry.getTracer("order-service", "1.0.0");
+
+public void processOrder(String orderId) {
+    Span span = tracer.spanBuilder("processOrder")
+        .setAttribute("order.id", orderId)
+        .setAttribute("order.type", "ECOMMERCE")
+        .startSpan();
+
+    try (Scope scope = span.makeCurrent()) {
+        // Any child spans created here will be children of this span
+        validateOrder(orderId);
+        span.addEvent("order.validated");
+
+        chargePayment(orderId);
+        span.setAttribute("payment.status", "charged");
+
+    } catch (Exception e) {
+        span.recordException(e);
+        span.setStatus(StatusCode.ERROR, e.getMessage());
+        throw e;
+    } finally {
+        span.end();
+    }
+}
+```
+
+**Auto-instrumentation (zero-code):**
+```bash
+# Attach Java agent — instruments HTTP clients, JDBC, messaging, etc. automatically
+java -javaagent:opentelemetry-javaagent.jar \
+     -Dotel.service.name=order-service \
+     -Dotel.exporter.otlp.endpoint=http://otel-collector:4317 \
+     -Dotel.traces.exporter=otlp \
+     -Dotel.metrics.exporter=otlp \
+     -Dotel.logs.exporter=otlp \
+     -jar app.jar
+```
+
+**Sampling strategies:**
+| Strategy | Description | Use case |
+|----------|-------------|----------|
+| Always On | 100% sampled | Dev/test only |
+| Always Off | 0% sampled | Disable tracing |
+| TraceIdRatioBased | Sample X% of traces | High-traffic services |
+| ParentBased | Respect upstream sampling | Default — recommended |
+| Tail-based | Sample after seeing full trace | Capture all errors/slow traces |
+
+**Context propagation in async code:**
+```java
+// WRONG — context lost across thread boundary
+executorService.submit(() -> {
+    processAsync(); // span context is null here
+});
+
+// CORRECT — wrap runnable with context
+Context context = Context.current();
+executorService.submit(context.wrap(() -> {
+    processAsync(); // span context propagated correctly
+}));
+```
+
+---
+
+### 3.9 OpenTelemetry Integration
+
+OpenTelemetry (OTel) is the CNCF standard for unified observability — one API/SDK for logs + metrics + traces.
+
+**Architecture:**
+```
+Java App (OTel SDK)
+    │ OTLP (gRPC/HTTP)
+    ▼
+OpenTelemetry Collector
+    ├── Processors (batch, filter, tail-sampling, resource detection)
+    ├── ─► Jaeger (traces)
+    ├── ─► Prometheus (metrics)
+    └── ─► Loki / Elasticsearch (logs)
+```
+
+**OTel Collector config (`otel-collector-config.yaml`):**
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+  resource:
+    attributes:
+      - action: insert
+        key: environment
+        value: production
+  tail_sampling:
+    policies:
+      - name: errors-policy
+        type: status_code
+        status_code: {status_codes: [ERROR]}
+      - name: slow-traces
+        type: latency
+        latency: {threshold_ms: 1000}
+
+exporters:
+  jaeger:
+    endpoint: jaeger:14250
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource, tail_sampling]
+      exporters: [jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+```
+
+**Spring Boot + OTel (Spring Boot 3.x with Micrometer Tracing):**
+```xml
+<!-- pom.xml -->
+<dependency>
+    <groupId>io.micrometer</groupId>
+    <artifactId>micrometer-tracing-bridge-otel</artifactId>
+</dependency>
+<dependency>
+    <groupId>io.opentelemetry</groupId>
+    <artifactId>opentelemetry-exporter-otlp</artifactId>
+</dependency>
+```
+
+```yaml
+# application.yml
+management:
+  tracing:
+    sampling:
+      probability: 1.0  # 100% in dev, 0.1 in prod
+  otlp:
+    tracing:
+      endpoint: http://otel-collector:4318/v1/traces
+```
+
+---
+
+### 3.10 JVM Metrics
+
+Critical JVM metrics every senior engineer must know:
+
+**Memory:**
+```
+JVM Heap:
+┌─────────────────────────────────────────────┐
+│  Young Generation    │    Old Generation     │
+│  ┌────────┬────────┐ │                       │
+│  │ Eden   │Survivor│ │  Tenured Space        │
+│  └────────┴────────┘ │                       │
+└─────────────────────────────────────────────┘
+         + Metaspace (off-heap, class metadata)
+         + Direct Memory (NIO, off-heap)
+```
+
+| Metric | Prometheus name | Alert threshold |
+|--------|----------------|-----------------|
+| Heap used | `jvm_memory_used_bytes{area="heap"}` | > 80% of max |
+| GC pause | `jvm_gc_pause_seconds` | P99 > 200ms |
+| GC throughput | derived: 1 - (gc_time/total_time) | < 95% |
+| Metaspace | `jvm_memory_used_bytes{area="nonheap"}` | Near max |
+| Thread count | `jvm_threads_live_threads` | Near thread pool max |
+| Class loading | `jvm_classes_loaded_classes` | Unexpected growth |
+
+**GC monitoring:**
+```java
+// Programmatic GC notification
+List<GarbageCollectorMXBean> gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
+for (GarbageCollectorMXBean gcBean : gcBeans) {
+    NotificationEmitter emitter = (NotificationEmitter) gcBean;
+    emitter.addNotificationListener((notification, handback) -> {
+        GarbageCollectionNotificationInfo info =
+            GarbageCollectionNotificationInfo.from(
+                (CompositeData) notification.getUserData());
+        long duration = info.getGcInfo().getDuration();
+        if (duration > 200) { // ms
+            log.warn("Long GC pause: gcName={} durationMs={} cause={}",
+                info.getGcName(), duration, info.getGcCause());
+        }
+    }, null, null);
+}
+```
+
+---
+
+### 3.11 Application Health Monitoring
+
+**Spring Boot Actuator health:**
+```java
+@Component
+public class DatabaseHealthIndicator implements HealthIndicator {
+
+    private final DataSource dataSource;
+
+    @Override
+    public Health health() {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement("SELECT 1")) {
+            ps.executeQuery();
+            return Health.up()
+                .withDetail("database", "PostgreSQL")
+                .withDetail("connectionPool", getPoolStats())
+                .build();
+        } catch (SQLException e) {
+            return Health.down()
+                .withException(e)
+                .withDetail("database", "PostgreSQL")
+                .build();
+        }
+    }
+}
+```
+
+```yaml
+management:
+  health:
+    db:
+      enabled: true
+    redis:
+      enabled: true
+    kafka:
+      enabled: true
+  endpoint:
+    health:
+      show-details: when_authorized
+      show-components: always
+      group:
+        liveness:     # K8s liveness probe — is app alive?
+          include: livenessState
+        readiness:    # K8s readiness probe — can app serve traffic?
+          include: readinessState, db, redis
+```
+
+**Kubernetes probe strategy:**
+```yaml
+livenessProbe:
+  httpGet:
+    path: /actuator/health/liveness
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 3  # restart after 3 consecutive failures
+
+readinessProbe:
+  httpGet:
+    path: /actuator/health/readiness
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 3  # remove from load balancer after 3 failures
+```
+
+---
+
+### 3.12 Alerting Strategies
+
+**SLO-based alerting (Google SRE approach):**
+```yaml
+# Prometheus alerting rules
+groups:
+  - name: slo-alerts
+    rules:
+      # Error rate SLO: 99.9% success rate
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+          /
+          sum(rate(http_server_requests_seconds_count[5m]))
+          > 0.001
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Error rate above SLO"
+          description: "Error rate {{ $value | humanizePercentage }} exceeds 0.1% SLO"
+
+      # Latency SLO: P99 < 500ms
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_server_requests_seconds_bucket[5m])) by (le, uri)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+
+      # Burn rate alert (multi-window, multi-burn-rate)
+      - alert: ErrorBudgetBurnRate
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[1h]))
+            /
+            sum(rate(http_server_requests_seconds_count[1h]))
+          ) > 14.4 * 0.001  # 14.4x burn rate = 1-hour window on monthly SLO
+        labels:
+          severity: critical
+```
+
+**Alert design principles:**
+- Alert on symptoms, not causes (high error rate, not CPU)
+- Use multi-window burn rate alerting for SLO budgets
+- Every alert must have a runbook link
+- Pages (PagerDuty) only for customer-impacting issues
+- Tickets for slow-burn issues (filling disk over days)
+- Avoid alert fatigue — flapping alerts get ignored
+
+---
+
+### 3.13 Production Debugging
+
+**The debugging hierarchy:**
+1. Metrics → identify WHAT is wrong (latency spike, error rate up)
+2. Traces → identify WHERE it's wrong (which service, which operation)
+3. Logs → identify WHY (exact error, context)
+4. Profiler/dump → identify the root cause (code-level)
+
+**Remote JVM diagnostic tools:**
+
+```bash
+# Attach to running JVM
+jps -lv                        # list JVM processes
+jstack <pid>                   # thread dump to stdout
+jmap -heap <pid>               # heap summary
+jmap -histo:live <pid>         # heap histogram (triggers GC)
+jstat -gcutil <pid> 1000 10    # GC stats every 1s, 10 times
+
+# jcmd — preferred modern tool
+jcmd <pid> help                # list available diagnostics
+jcmd <pid> VM.flags            # current JVM flags
+jcmd <pid> VM.system_properties
+jcmd <pid> GC.heap_info
+jcmd <pid> Thread.print        # thread dump
+jcmd <pid> GC.heap_dump /tmp/heap.hprof   # heap dump
+```
+
+**Dynamic log level changes (Spring Boot Actuator):**
+```bash
+# Temporarily enable DEBUG for a specific package in production
+curl -X POST http://app:8080/actuator/loggers/com.example.payment \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel": "DEBUG"}'
+
+# Reset to INFO
+curl -X POST http://app:8080/actuator/loggers/com.example.payment \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel": "INFO"}'
+```
+
+---
+
+### 3.14 Thread Dumps Analysis
+
+A thread dump is a snapshot of all threads in the JVM at a point in time.
+
+**Collecting thread dumps:**
+```bash
+# Method 1: kill -3 (sends SIGQUIT — JVM prints dump to stdout)
+kill -3 <pid>
+
+# Method 2: jstack
+jstack -l <pid> > threaddump.txt
+
+# Method 3: jcmd
+jcmd <pid> Thread.print -l > threaddump.txt
+
+# Method 4: HTTP (if Actuator exposed)
+curl http://app:8080/actuator/threaddump
+```
+
+**Thread states and what they mean:**
+| State | Meaning | Concern |
+|-------|---------|---------|
+| RUNNABLE | Executing or ready to execute | Normal |
+| BLOCKED | Waiting to acquire monitor (synchronized) | Lock contention |
+| WAITING | `Object.wait()`, `LockSupport.park()` | Normal if expected |
+| TIMED_WAITING | `Thread.sleep()`, `join(timeout)` | Check if stuck |
+| TERMINATED | Done | Should not appear |
+
+**Deadlock example and detection:**
+```
+"Thread-1" BLOCKED on 0x00000000c2a07ef0 (owned by "Thread-2")
+"Thread-2" BLOCKED on 0x00000000c2a07f30 (owned by "Thread-1")
+```
+`jstack` automatically prints `Found X deadlocks` at the bottom — always check this first.
+
+**What to look for:**
+- Many threads BLOCKED on the same monitor → lock contention, consider `ReentrantLock` or lock striping
+- Many threads WAITING in `getConnection` → database connection pool exhausted → increase pool size or fix slow queries
+- Many threads in `RUNNABLE` in native code → usually network I/O → check for blocking calls
+- Thread names → always name your threads: `new ThreadFactory() { public Thread newThread(Runnable r) { Thread t = new Thread(r, "order-processor-" + counter.incrementAndGet()); return t; } }`
+
+**Analysis tools:** FastThread.io, IBM Thread Analyzer, VisualVM
+
+---
+
+### 3.15 Heap Dumps Analysis
+
+A heap dump is a binary snapshot of all objects in heap memory at a point in time.
+
+**When to take a heap dump:**
+- `OutOfMemoryError` (configure auto-dump: `-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/`)
+- Suspected memory leak (heap grows over time, GC can't reclaim)
+- High GC pressure investigation
+
+```bash
+# -XX:+HeapDumpOnOutOfMemoryError — auto-generate on OOM
+# Force a heap dump of live objects (triggers Full GC):
+jcmd <pid> GC.heap_dump /tmp/heap.hprof
+
+# jmap (older, still works):
+jmap -dump:live,format=b,file=/tmp/heap.hprof <pid>
+```
+
+**Analyzing with Eclipse MAT (Memory Analyzer Tool):**
+
+Key reports to run:
+1. **Leak Suspects** — automatic; finds objects with unexpectedly large retained heap
+2. **Dominator Tree** — what's retaining the most memory
+3. **Histogram** — count and size by class
+4. **OQL (Object Query Language)**:
+```sql
+-- Find all String objects > 1MB
+SELECT * FROM java.lang.String s WHERE s.@retainedHeapSize > 1048576
+
+-- Find sessions that haven't been used in > 30 minutes
+SELECT * FROM com.example.UserSession s
+WHERE (currentTimeMillis() - s.lastAccessTime) > 1800000
+```
+
+**Common memory leak patterns:**
+| Pattern | Cause | Fix |
+|---------|-------|-----|
+| Static collections | `static Map<K,V>` grows unbounded | Use `WeakHashMap`, eviction, or remove statics |
+| Listener leaks | Adding listeners, never removing | Use `WeakReference`, always deregister |
+| ThreadLocal leaks | ThreadLocal in thread pool, never cleaned | Always `threadLocal.remove()` in finally |
+| Cache without eviction | Unbounded in-memory cache | Add max size + TTL (Caffeine) |
+| ClassLoader leak | In-app containers (JBoss, Tomcat) on redeploy | Investigate with MAT OQL |
+
+---
+
+### 3.16 JFR (Java Flight Recorder)
+
+JFR is a low-overhead (< 1% typical) continuous profiling system built into the JVM (free since JDK 11).
+
+**Starting JFR:**
+```bash
+# Start with application
+java -XX:StartFlightRecording=duration=60s,filename=/tmp/recording.jfr \
+     -XX:FlightRecorderOptions=stackdepth=64 \
+     -jar app.jar
+
+# Attach to running JVM
+jcmd <pid> JFR.start name=MyRecording duration=120s filename=/tmp/rec.jfr
+
+# Check status
+jcmd <pid> JFR.check
+
+# Stop and dump
+jcmd <pid> JFR.stop name=MyRecording filename=/tmp/rec.jfr
+
+# Continuous recording (ring buffer, never stops)
+jcmd <pid> JFR.start name=Continuous settings=profile maxsize=250m
+jcmd <pid> JFR.dump name=Continuous filename=/tmp/incident.jfr  # dump on incident
+```
+
+**What JFR captures:**
+- CPU profiling (method profiling, hot methods)
+- Memory allocation (which code path allocates most)
+- GC events (pause times, causes, heap before/after)
+- Thread blocking (lock contention, thread parking)
+- I/O (file reads/writes, socket operations)
+- JIT compilation events
+- Exceptions (thrown, not just caught)
+- HTTP/JDBC/JPA events (via OTel/Spring instrumentation)
+
+**Programmatic JFR events:**
+```java
+// Custom JFR events for business operations
+@Label("Order Processing")
+@Description("Tracks order processing performance")
+@Category("Business")
+public class OrderProcessingEvent extends Event {
+
+    @Label("Order ID")
+    public String orderId;
+
+    @Label("Order Amount")
+    public double amount;
+
+    @Label("Processing Result")
+    public String result;
+}
+
+// Usage
+public void processOrder(Order order) {
+    OrderProcessingEvent event = new OrderProcessingEvent();
+    event.begin();
+    try {
+        doProcess(order);
+        event.result = "SUCCESS";
+    } catch (Exception e) {
+        event.result = "FAILURE:" + e.getMessage();
+        throw e;
+    } finally {
+        event.orderId = order.getId();
+        event.amount = order.getAmount();
+        event.commit(); // only recorded if event.shouldCommit() — threshold filtering
+    }
+}
+```
+
+**JFR Event Streaming (JDK 14+):**
+```java
+// Real-time JFR event consumption — no dump file needed
+try (RecordingStream rs = new RecordingStream()) {
+    rs.enable("jdk.GarbageCollection").withThreshold(Duration.ofMillis(100));
+    rs.enable("jdk.CPULoad").withPeriod(Duration.ofSeconds(1));
+    rs.enable("jdk.JavaMonitorEnter").withThreshold(Duration.ofMillis(10));
+
+    rs.onEvent("jdk.GarbageCollection", event -> {
+        log.warn("GC event: name={} duration={}ms",
+            event.getString("name"),
+            event.getDuration("duration").toMillis());
+    });
+
+    rs.onEvent("jdk.CPULoad", event -> {
+        metrics.gauge("jvm.cpu.jvm", event.getFloat("jvmUser"));
+    });
+
+    rs.startAsync(); // non-blocking
+}
+```
+
+---
+
+### 3.17 JMC (Java Mission Control)
+
+JMC is the GUI tool for analyzing JFR recordings. Free since JDK 11.
+
+**Key views in JMC:**
+1. **Automated Analysis** — green/yellow/red indicators for common problems
+2. **Method Profiling** — flame graph of hot methods
+3. **Allocation Profiling** — where allocations happen by code path
+4. **Lock Instances** — most contended monitors
+5. **GC** — timeline of all GC events with heap before/after
+6. **Exceptions** — all thrown exceptions (not just uncaught)
+7. **IO** — file and socket I/O breakdown
+8. **Thread Graph** — visual timeline of all thread states
+
+**Interpreting a flame graph:**
+```
+Width = proportion of time spent (or samples)
+Height = call stack depth
+Look for: wide plateaus at the top = hot code = optimization candidates
+```
+
+**JMC Agent — dynamic instrumentation:**
+```xml
+<!-- jmc-agent.xml — attach at runtime without code changes -->
+<jfragent>
+    <events>
+        <event id="demo.OrderService">
+            <label>Order Service Call</label>
+            <class>com.example.OrderService</class>
+            <method>
+                <name>processOrder</name>
+                <descriptor>(Ljava/lang/String;)V</descriptor>
+            </method>
+            <fields>
+                <field>
+                    <name>orderId</name>
+                    <expression>$1</expression> <!-- first parameter -->
+                </field>
+            </fields>
+        </event>
+    </events>
+</jfragent>
+```
+
+```bash
+# Attach JMC agent to running JVM without restart
+java -javaagent:jmc-agent.jar=jmc-agent.xml -jar app.jar
+```
+
+---
+
+## 4. Interview Questions & Answers
+
+**Q1: What are the three pillars of observability and how do they differ?**
+
+> Logs are discrete, timestamped events — high detail, high cost, unbounded cardinality. Metrics are numerical measurements aggregated over time — low cost, queryable, must have low-cardinality labels. Traces capture the causal chain of a single request across services — they answer "what happened and in what order." The key insight is that they're complementary: metrics surface a problem, traces localize it, logs explain it.
+
+---
+
+**Q2: Why is high cardinality dangerous in metrics labels?**
+
+> Metrics systems like Prometheus create a time series for every unique combination of label values. If you add a `userId` label with millions of values, you create millions of time series — each consuming memory in Prometheus and storage on disk. This is called a "cardinality explosion." The rule: metrics labels must have a bounded, small set of values (HTTP method, status code, endpoint path). High-cardinality data (user IDs, order IDs) belongs in logs or trace attributes.
+
+---
+
+**Q3: Explain MDC and why MDC.clear() is critical in thread pool environments.**
+
+> MDC (Mapped Diagnostic Context) stores key-value pairs in a thread-local map that Logback/Log4j2 automatically appends to every log line. In a thread-pool model (e.g., Tomcat), threads are reused across requests. If you set `MDC.put("userId", "user123")` at the start of request A but forget `MDC.clear()` at the end, the next request B handled by the same thread will have `userId=user123` in its logs — a data leak and a debugging nightmare. Always clear MDC in a `finally` block or use a filter/interceptor pattern.
+
+---
+
+**Q4: What's the difference between `AsyncAppender` in Logback and `AsyncLogger` in Log4j2?**
+
+> Logback's `AsyncAppender` wraps a synchronous appender and uses a blocking `ArrayBlockingQueue`. The application thread enqueues the log event and continues. A background thread dequeues and writes. The throughput is limited by the queue size and the blocking behavior when full. Log4j2's `AsyncLogger` uses the LMAX Disruptor — a lock-free ring buffer that achieves 18x higher throughput because there's no lock contention between producer and consumer. For high-throughput services (>100K events/sec), Log4j2 async loggers win clearly.
+
+---
+
+**Q5: How do you propagate trace context across async boundaries in Java?**
+
+> Span context lives in a thread-local by default (OpenTelemetry's `Context`). When you submit work to an executor, the new thread has no context. Fix: use `context.wrap(runnable)` or `context.wrapExecutor(executor)` from the OTel SDK. For reactive frameworks (Project Reactor), use `reactor-core-micrometer` or the OTel Reactor instrumentation which propagates context through the reactive chain automatically. For messaging (Kafka/RabbitMQ), serialize the trace context into message headers and extract it on the consumer side.
+
+---
+
+**Q6: What is tail-based sampling and when should you use it?**
+
+> Head-based sampling makes the keep/drop decision at trace start (before you know the outcome). Tail-based sampling buffers the entire trace, makes the decision after the trace completes. This lets you: always keep error traces, always keep slow traces (P99+), and sample healthy/fast traces at 1–5%. The downside is that you need to buffer potentially millions of spans in the OTel Collector or a dedicated system (Grafana Tempo, Jaeger with remote sampling) before the decision. Use tail-based sampling in production where you want 100% coverage of interesting traces while controlling volume.
+
+---
+
+**Q7: How do you diagnose a thread pool exhaustion issue?**
+
+> 1. Metrics first: check `executor.pool.size`, `executor.queue.size` — if queue is full, pool is exhausted. 2. Thread dump: `jstack <pid>` or `jcmd <pid> Thread.print`. Look for many threads WAITING in `getTask()` (idle) but the queue is full — means max threads reached and all are busy. 3. Look at what those threads are doing: if they're all BLOCKED on a DB call, the fix is in connection pool / query optimization. If WAITING on an HTTP call, the upstream is slow. 4. Resolution options: increase pool size (if CPU/IO bound), add circuit breaker, or optimize the slow operation.
+
+---
+
+**Q8: What is JFR and why is it preferred over traditional profilers?**
+
+> JFR (Java Flight Recorder) is built into the JVM (HotSpot) and uses JVM-internal hooks to capture events with sub-1% overhead — safe for continuous use in production. Traditional profilers (YourKit, JProfiler) use either bytecode instrumentation or JVMTI saute sampling which can add 5–20% overhead and distort timing. JFR captures: GC events, JIT compilation, thread lifecycle, allocations, lock contention, I/O, and custom events — all with timestamps and stack traces. You can keep a continuous 250MB ring-buffer recording always-on and dump it when an incident occurs, giving you retroactive profiling data — impossible with traditional profilers.
+
+---
+
+**Q9: How would you approach diagnosing a memory leak in production?**
+
+> 1. Observe the symptom: heap grows over time, Full GC runs frequently but doesn't reclaim much. 2. Take multiple heap histograms 10 minutes apart: `jcmd <pid> GC.heap_info` — look for object counts/sizes growing. 3. Enable JFR allocation profiling to find the allocation site. 4. Take a heap dump: `-XX:+HeapDumpOnOutOfMemoryError` or `jcmd GC.heap_dump`. 5. Analyze in Eclipse MAT: run Leak Suspects, check Dominator Tree for what's retaining memory. 6. Common culprits: static collections, unbounded caches, ThreadLocal not cleared, event listeners not deregistered, Session objects not expiring.
+
+---
+
+**Q10: What's the difference between liveness and readiness probes in Spring Boot?**
+
+> Liveness: "Is the JVM alive and not deadlocked?" — if this fails, Kubernetes restarts the pod. Should only fail for truly broken states (deadlock, infinite loop, corrupted state). Never fail liveness because a database is down. Readiness: "Is the application ready to serve traffic?" — if this fails, Kubernetes removes the pod from the load balancer but doesn't restart it. Should fail when dependencies (DB, Redis, Kafka) are unreachable. Spring Boot maps these to `ApplicationContext` lifecycle states — and `readinessProbe` can include custom health indicators for downstream dependencies.
+
+---
+
+**Q11: How do you implement SLO-based alerting vs threshold-based alerting?**
+
+> Threshold alerting: "alert if latency > 500ms for 5 minutes." It's noisy, requires constant tuning, and doesn't reflect user impact. SLO-based: define a service level objective (e.g., 99.9% of requests succeed in < 500ms over 30 days). Calculate your error budget (0.1% = ~43 min/month). Alert when the burn rate is consuming the budget too fast — e.g., "if 1-hour burn rate > 14.4x normal, you'll exhaust the monthly budget in 2 hours." Multi-window burn rate (short window for fast detection + long window to avoid flapping) is the Google SRE recommended approach. This directly ties alerts to user impact rather than arbitrary thresholds.
+
+---
+
+**Q12: Explain the OpenTelemetry Collector's role in a production observability stack.**
+
+> The OTel Collector acts as a vendor-agnostic telemetry processing pipeline between applications and backends. Benefits: (1) Decoupling — change from Jaeger to Zipkin without touching app code. (2) Batching and retry — buffers data during backend outages, retries on failure. (3) Processing — tail-based sampling, attribute redaction, PII scrubbing, data enrichment. (4) Fan-out — send the same trace data to Jaeger AND a long-term store simultaneously. (5) Protocol translation — receive OTLP, export as Zipkin format. In Kubernetes, run it as a DaemonSet (one per node, efficient sidecar-free collection) or as a central Gateway deployment for organization-wide routing.
+
+---
+
+**Q13: What are the key metrics to monitor for a Java microservice in production?**
+
+> **RED metrics (per service):** request rate, error rate, request duration (P50/P95/P99). **JVM:** heap usage, GC pause duration, GC throughput, thread count. **Thread pools:** active threads, queue size, rejection count. **Connection pools (HikariCP):** active connections, pending connections, connection acquisition time. **Business metrics:** custom counters/gauges relevant to the domain. **Downstream dependencies:** external HTTP call latency/errors, DB query duration, cache hit rate. Alert on: error rate SLO breach, P99 latency SLO breach, connection pool near exhaustion, heap consistently > 80%.
+
+---
+
+**Q14: How would you analyze a thread dump to find a deadlock?**
+
+> `jstack` automatically detects and prints deadlocks at the end of the dump: `Found 1 deadlock. "Thread-A" waiting for lock 0xABCD held by "Thread-B". "Thread-B" waiting for lock 0xEFGH held by "Thread-A"`. To find it manually: search for "BLOCKED" threads, check what lock they're waiting for ("waiting to lock <0xABCD>"), find which thread holds that lock ("locked <0xABCD>"), follow the chain. Prevention: always acquire locks in a consistent, globally-defined order. Use `tryLock(timeout)` with `ReentrantLock` instead of `synchronized` to avoid indefinite blocking. Use deadlock-detection tools in CI (e.g., `ThreadMXBean.findDeadlockedThreads()`).
+
+---
+
+**Q15: What is the difference between `publishPercentiles` and `publishPercentileHistogram` in Micrometer?**
+
+> `publishPercentiles(0.95, 0.99)` computes percentiles in-process (client-side) using a digest algorithm and exports pre-computed values. These cannot be aggregated across instances — if you have 10 pods, you cannot average their P99 values and get the true cluster P99. `publishPercentileHistogram()` exports the raw histogram buckets to Prometheus. Prometheus then computes percentiles server-side using `histogram_quantile()`. This allows correct aggregation across instances. The trade-off: histogram metrics are much higher cardinality (many buckets per metric). For production: use `publishPercentileHistogram()` when you need correct aggregation across instances, and use `publishPercentiles()` only for single-instance metrics or when the approximation is acceptable.
+
+---
+
+## 5. Advanced / Senior-Level Considerations
+
+### Observability in Distributed Systems
+
+**Correlation across the three pillars:**
+- OpenTelemetry auto-injects `traceId` and `spanId` into MDC → every log line is automatically correlated to a trace
+- Grafana Exemplars: attach a `traceId` to a Prometheus metric data point → click a spike on a latency graph and jump directly to the trace
+
+**Exemplar in Micrometer:**
+```java
+Timer.builder("http.requests")
+    .publishPercentileHistogram()
+    .register(registry)
+    .record(() -> {
+        // OTel auto-attaches current traceId as exemplar to histogram
+        handleRequest();
+    });
+```
+
+### Observability Maturity Model
+```
+Level 1: Ad-hoc logging (System.out.println)
+Level 2: Structured logging + centralized aggregation
+Level 3: Metrics + dashboards + threshold alerts
+Level 4: Distributed tracing + correlation (logs ↔ traces)
+Level 5: SLO-based alerting + error budgets + automated runbooks
+Level 6: Continuous profiling (JFR) + anomaly detection + predictive alerting
+```
+
+### Performance overhead considerations
+| Tool | Overhead | Safe for production? |
+|------|----------|---------------------|
+| Structured logging (async) | < 1% | Yes |
+| Micrometer metrics | < 0.1% | Yes |
+| OTel tracing (100% sample) | 3–7% | No (use 1–10%) |
+| OTel auto-agent | 1–3% | Yes |
+| JFR (default settings) | < 1% | Yes — continuous |
+| JFR (allocation profiling) | 2–5% | Short bursts only |
+| Heap dump | Stop-the-world | Only when needed |
+| jstack | Minimal | Yes |
+
+### Design patterns for observability
+
+**Outbox + trace propagation:**
+When writing to DB + publishing to Kafka in the same transaction, store the trace context in the outbox table. The Kafka producer reads the trace context and continues the trace on the consumer side — achieving end-to-end tracing across async boundaries.
+
+**Observability as a cross-cutting concern:**
+Use Spring AOP or OpenTelemetry instrumentation libraries to avoid scattering logging/metrics/tracing code throughout business logic:
+```java
+@Aspect
+@Component
+public class ObservabilityAspect {
+
+    private final MeterRegistry registry;
+    private final Tracer tracer;
+
+    @Around("@annotation(Observed)")
+    public Object observe(ProceedingJoinPoint pjp) throws Throwable {
+        String name = pjp.getSignature().toShortString();
+        Timer.Sample sample = Timer.start(registry);
+        Span span = tracer.nextSpan().name(name).start();
+
+        try (Tracer.SpanInScope ws = tracer.withSpan(span)) {
+            Object result = pjp.proceed();
+            return result;
+        } catch (Throwable t) {
+            span.error(t);
+            registry.counter("errors", "method", name).increment();
+            throw t;
+        } finally {
+            sample.stop(registry.timer("method.duration", "method", name));
+            span.end();
+        }
+    }
+}
+```
+
+---
+
+## 6. Summary / Cheat Sheet
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    JAVA OBSERVABILITY CHEAT SHEET                   │
+├─────────────────┬───────────────────────────────────────────────────┤
+│ Logging API     │ SLF4J (always — never log4j2/logback API directly)│
+│ Logging Impl    │ Logback (default) or Log4j2 (high-throughput)     │
+│ Log Format      │ JSON (logstash-logback-encoder / JsonTemplateLayout│
+│ Async Logging   │ AsyncAppender (Logback) / AsyncLogger (Log4j2)    │
+│ Context         │ MDC — always clear() in finally                   │
+├─────────────────┼───────────────────────────────────────────────────┤
+│ Metrics API     │ Micrometer                                        │
+│ Metrics Backend │ Prometheus + Grafana                              │
+│ Key rule        │ Low-cardinality labels ONLY                       │
+│ Percentiles     │ publishPercentileHistogram() for multi-instance   │
+├─────────────────┼───────────────────────────────────────────────────┤
+│ Tracing         │ OpenTelemetry (SDK + auto-agent)                  │
+│ Propagation     │ W3C TraceContext headers                          │
+│ Sampling        │ ParentBased + tail-based for production           │
+│ Collector       │ OTel Collector (batch, sample, route)             │
+├─────────────────┼───────────────────────────────────────────────────┤
+│ JVM Profiling   │ JFR (always-on in production)                    │
+│ Analysis GUI    │ JMC + Eclipse MAT                                 │
+│ Thread dump     │ jcmd <pid> Thread.print                           │
+│ Heap dump       │ -XX:+HeapDumpOnOutOfMemoryError                   │
+│ Quick diag      │ jcmd <pid> GC.heap_info / VM.flags               │
+├─────────────────┼───────────────────────────────────────────────────┤
+│ Alerting        │ SLO-based > threshold-based                       │
+│ Golden signals  │ Latency, Traffic, Errors, Saturation              │
+│ RED method      │ Rate, Errors, Duration                            │
+│ Probes          │ Liveness ≠ dependency health                      │
+│                 │ Readiness = include dependency checks             │
+└─────────────────┴───────────────────────────────────────────────────┘
+```
+
+**Top 10 senior-level decisions:**
+1. Use async logging — synchronous logging kills throughput
+2. Log JSON in production — free-text is for humans, machines need structure
+3. Inject traceId/spanId into MDC via OTel — correlate logs and traces automatically
+4. Never use high-cardinality labels in metrics
+5. Use `publishPercentileHistogram()` not `publishPercentiles()` for aggregatable percentiles
+6. Keep JFR continuous recording always-on (< 1% overhead)
+7. Alert on symptoms (latency, error rate) not causes (CPU, GC)
+8. Use multi-window burn rate alerting for SLO budgets
+9. Run OTel Collector as the universal telemetry pipeline
+10. Treat observability as a design concern, not an operational afterthought
+
+
+# Java Architectures — Senior Developer Study Notes
+
+---
+
+## 1. Topic Overview
+
+**Architecture** is the set of significant design decisions that shape a system — its structure, behavior, and quality attributes. For Java systems, architectural choices determine how well the system handles growth, failure, change, and complexity.
+
+**Why it matters for senior engineers:**
+- Wrong architecture = technical debt that compounds for years
+- Architecture decisions are expensive to reverse
+- Senior engineers own the trade-off conversations, not just the implementation
+- Every architectural pattern solves specific problems and introduces specific costs
+
+**The fundamental tension in all architecture:**
+```
+Simplicity ◄──────────────────────────────► Capability
+(Monolith)                              (Microservices)
+
+Consistency ◄─────────────────────────────► Availability
+(ACID)                                  (BASE/Eventual)
+
+Coupling ◄────────────────────────────────► Cohesion
+(Easy to call)                          (Easy to change)
+```
+
+**Real-world scenarios:**
+- Startup → monolith first, ship fast, extract services when pain is real
+- E-commerce checkout → CQRS + Event Sourcing for order history
+- Banking transfers → Saga pattern for distributed transactions
+- Real-time trading → Reactive + Event-driven for back-pressure management
+- SaaS platform → Cloud-native + API-first for multi-tenant scale
+
+---
+
+## 2. Core Architectural Principles
+
+**SOLID at the architecture level:**
+- **SRP** → Each service/module owns one bounded context
+- **OCP** → Extend behavior via events/plugins, not modifying existing code
+- **LSP** → Services behind interfaces should be substitutable
+- **ISP** → Narrow APIs (avoid chatty mega-interfaces)
+- **DIP** → Depend on abstractions (ports), not implementations (adapters)
+
+**Quality Attributes (non-functional requirements):**
+| Attribute | Architectural lever |
+|-----------|-------------------|
+| Scalability | Stateless services, horizontal scaling, sharding |
+| Availability | Redundancy, failover, circuit breakers |
+| Consistency | Transactions, sagas, consensus protocols |
+| Maintainability | Loose coupling, high cohesion, clear boundaries |
+| Observability | Structured logging, metrics, tracing |
+| Security | Zero trust, defense in depth, principle of least privilege |
+
+**Conway's Law:**
+> Organizations design systems that mirror their communication structure. Microservices work only when team boundaries align with service boundaries.
+
+---
+
+## 3. Subtopics Breakdown
+
+---
+
+### 3.1 Monolithic Architecture
+
+**Definition:** All application functionality deployed as a single unit. One deployable artifact (WAR/JAR) containing UI, business logic, and data access.
+
+```
+┌──────────────────────────────────────┐
+│            MONOLITH                  │
+│  ┌──────────┐  ┌──────────────────┐  │
+│  │    UI    │  │  REST Controllers │  │
+│  └──────────┘  └──────────────────┘  │
+│  ┌────────────────────────────────┐  │
+│  │       Business Services        │  │
+│  └────────────────────────────────┘  │
+│  ┌────────────────────────────────┐  │
+│  │       Data Access Layer        │  │
+│  └────────────────────────────────┘  │
+│  ┌────────────────────────────────┐  │
+│  │     Single Database Schema     │  │
+│  └────────────────────────────────┘  │
+└──────────────────────────────────────┘
+```
+
+**Types:**
+- **Modular Monolith** — well-structured internal modules, single deployable (recommended starting point)
+- **Big Ball of Mud** — no structure, everything depends on everything (what monoliths become without discipline)
+- **Single-Page App + API Monolith** — UI separate, backend is monolith
+
+```java
+// Modular Monolith — Java 9+ modules enforce boundaries
+// module-info.java in order module
+module com.example.orders {
+    requires com.example.catalog;
+    requires com.example.payments;
+    exports com.example.orders.api;          // public API only
+    // com.example.orders.internal is NOT exported — enforced at compile time
+}
+
+// module-info.java in payments module
+module com.example.payments {
+    exports com.example.payments.api;
+    // Does NOT require orders — no circular dependency
+}
+```
+
+**Key Details:**
+- Simple to develop, test, debug, deploy initially
+- Vertical scaling (bigger machine) vs horizontal scaling (more instances — requires stateless design)
+- Shared DB schema creates implicit coupling between modules
+- One bad deployment takes down everything
+- Technology lock-in — entire app must use same language/framework
+
+**When to choose:**
+- Team < 10 engineers
+- Domain not yet well-understood
+- Startup/MVP — premature decomposition is a real risk
+- Low traffic — no need to scale parts independently
+
+**Common Pitfalls:**
+- Jumping to microservices before understanding the domain
+- Letting the monolith become a Big Ball of Mud through lack of module discipline
+- Shared mutable static state prevents horizontal scaling
+
+---
+
+### 3.2 Layered (N-Tier) Architecture
+
+**Definition:** Application organized into horizontal layers, each with a specific responsibility. Most common: Presentation → Business Logic → Data Access → Database.
+
+```
+┌─────────────────────────────────────┐
+│         Presentation Layer          │  ← REST controllers, DTOs
+│         (@RestController)           │
+├─────────────────────────────────────┤
+│         Business Logic Layer        │  ← Domain logic, rules
+│         (@Service)                  │
+├─────────────────────────────────────┤
+│         Data Access Layer           │  ← Repositories, queries
+│         (@Repository)               │
+├─────────────────────────────────────┤
+│         Database                    │  ← PostgreSQL, MySQL
+└─────────────────────────────────────┘
+         ↓ Dependencies flow downward only
+```
+
+```java
+// Presentation Layer
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+    private final OrderService orderService;    // depends on layer below
+
+    @PostMapping
+    public ResponseEntity<OrderResponse> createOrder(@RequestBody @Valid CreateOrderRequest request) {
+        OrderDTO order = orderService.createOrder(request.toCommand());
+        return ResponseEntity.status(201).body(OrderResponse.from(order));
+    }
+}
+
+// Business Layer
+@Service
+@Transactional
+public class OrderService {
+    private final OrderRepository orderRepository;
+    private final InventoryService inventoryService;
+
+    public OrderDTO createOrder(CreateOrderCommand command) {
+        inventoryService.reserve(command.items()); // cross-service within layer
+        Order order = Order.create(command);
+        return OrderDTO.from(orderRepository.save(order));
+    }
+}
+
+// Data Access Layer
+@Repository
+public interface OrderRepository extends JpaRepository<Order, UUID> {
+    List<Order> findByCustomerIdAndStatus(UUID customerId, OrderStatus status);
+}
+```
+
+**Key Details:**
+- Strict layering: layer N can only call layer N-1 (no skipping)
+- Relaxed layering: layer N can call any layer below (common in practice, less pure)
+- The "Lasagna problem": too many layers adds indirection without value
+- Easy to understand, test (mock the layer below), and onboard new developers
+
+**Common Pitfalls:**
+- Anemic domain model: business logic leaks into service layer, entities become data bags
+- Fat services: all logic ends up in @Service classes, poor cohesion
+- Circular dependencies between services in the same layer
+
+---
+
+### 3.3 Hexagonal Architecture (Ports and Adapters)
+
+**Definition:** Domain is at the center, isolated from all external concerns (HTTP, DB, messaging) via ports (interfaces) and adapters (implementations). Coined by Alistair Cockburn.
+
+```
+                    ┌─────────────────────────┐
+   REST API ──────► │  Input Adapter          │
+   GraphQL ────────►│  (driving/primary)      │
+   Kafka   ──────── ├───────────┐             │
+                    │  INPUT    │             │
+                    │  PORT     │  DOMAIN     │
+                    │(interface)│  (pure Java │
+                    │           │  no imports)│
+                    │  OUTPUT   │             │
+                    │  PORT     │             │
+                    │(interface)├─────────────┤
+                    │           │  Output     │──► PostgreSQL
+                    │           │  Adapter    │──► Kafka
+                    └─────────────────────────┘──► Redis
+```
+
+```java
+// === DOMAIN (center — zero framework dependencies) ===
+public class Order {
+    private OrderId id;
+    private CustomerId customerId;
+    private List<OrderLine> lines;
+    private OrderStatus status;
+
+    // Rich domain model — behavior lives here
+    public void confirm() {
+        if (this.status != OrderStatus.PENDING) {
+            throw new InvalidOrderStateException("Can only confirm pending orders");
+        }
+        this.status = OrderStatus.CONFIRMED;
+        DomainEvents.raise(new OrderConfirmed(this.id));
+    }
+}
+
+// === INPUT PORT (driving side interface) ===
+public interface OrderUseCase {
+    OrderId createOrder(CreateOrderCommand command);
+    void confirmOrder(OrderId orderId);
+}
+
+// === OUTPUT PORT (driven side interface — defined by domain) ===
+public interface OrderRepository {           // Domain defines this interface
+    void save(Order order);
+    Optional<Order> findById(OrderId id);
+}
+
+public interface PaymentGateway {
+    PaymentResult charge(PaymentRequest request);
+}
+
+// === DOMAIN SERVICE (implements input port) ===
+@UseCase                                     // custom annotation, not @Service
+public class OrderApplicationService implements OrderUseCase {
+    private final OrderRepository orderRepository;      // OUTPUT PORT
+    private final PaymentGateway paymentGateway;        // OUTPUT PORT
+    private final InventoryPort inventoryPort;           // OUTPUT PORT
+
+    @Override
+    public OrderId createOrder(CreateOrderCommand command) {
+        // Pure business logic — no framework, no infrastructure
+        Order order = Order.create(command);
+        inventoryPort.reserve(order.getLines());
+        orderRepository.save(order);
+        return order.getId();
+    }
+}
+
+// === INPUT ADAPTER (driving side — framework lives here) ===
+@RestController
+@RequestMapping("/api/orders")
+public class OrderRestAdapter {
+    private final OrderUseCase orderUseCase;    // DEPENDS ON PORT, not implementation
+
+    @PostMapping
+    public ResponseEntity<String> create(@RequestBody CreateOrderRequest request) {
+        OrderId id = orderUseCase.createOrder(request.toCommand());
+        return ResponseEntity.status(201).body(id.value());
+    }
+}
+
+// === OUTPUT ADAPTER (driven side — JPA implementation) ===
+@Repository
+public class JpaOrderRepository implements OrderRepository {  // IMPLEMENTS DOMAIN PORT
+    private final JpaOrderEntityRepository jpaRepository;     // Spring Data JPA
+
+    @Override
+    public void save(Order order) {
+        jpaRepository.save(OrderEntity.from(order));
+    }
+
+    @Override
+    public Optional<Order> findById(OrderId id) {
+        return jpaRepository.findById(id.value()).map(OrderEntity::toDomain);
+    }
+}
+```
+
+**Key Details:**
+- Domain has ZERO dependencies on frameworks (no Spring annotations, no JPA, no Jackson)
+- Easy to test domain in isolation — mock the ports, no Spring context needed
+- Swap adapters without touching domain — replace PostgreSQL with MongoDB by implementing new adapter
+- Testability: `OrderApplicationService` can be tested with in-memory `OrderRepository` stub
+- The inside (domain) defines the output port interfaces — dependency inversion at the architectural level
+
+**Common Pitfalls:**
+- Putting framework annotations inside domain classes
+- Creating "ports" for everything — adds overhead, use judgment (simple CRUD may not need it)
+- Mapper explosion: domain ↔ JPA entity ↔ DTO mappings add boilerplate; use MapStruct
+
+---
+
+### 3.4 Clean Architecture
+
+**Definition:** Robert Martin's refinement of Hexagonal. Four concentric layers with the Dependency Rule: source code dependencies can only point inward.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  FRAMEWORKS & DRIVERS (outermost)                           │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  INTERFACE ADAPTERS                                  │   │
+│  │  ┌─────────────────────────────────────────────┐   │   │
+│  │  │  APPLICATION BUSINESS RULES (Use Cases)      │   │   │
+│  │  │  ┌───────────────────────────────────────┐  │   │   │
+│  │  │  │  ENTERPRISE BUSINESS RULES (Entities)  │  │   │   │
+│  │  │  │  (most stable, most protected)         │  │   │   │
+│  │  │  └───────────────────────────────────────┘  │   │   │
+│  │  └─────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+         Dependencies always point INWARD →
+```
+
+**Layer responsibilities:**
+| Layer | Contents | Changes when |
+|-------|----------|-------------|
+| Entities | Domain objects, business rules | Business rules change (rare) |
+| Use Cases | Application-specific logic | Application behavior changes |
+| Interface Adapters | Controllers, Presenters, Gateways | UI/DB technology changes |
+| Frameworks & Drivers | Spring, JPA, HTTP, DB | Framework versions change |
+
+**Key difference from Hexagonal:** Clean Architecture explicitly separates use-case layer from entity layer, and mandates the Dependency Rule formally. In practice, they're very similar — Hexagonal is the pattern, Clean Architecture is a formalization.
+
+**Package structure:**
+```
+com.example.orders/
+├── domain/                          # Entities layer
+│   ├── model/Order.java
+│   ├── model/OrderLine.java
+│   └── event/OrderConfirmed.java
+├── application/                     # Use Cases layer
+│   ├── port/in/CreateOrderUseCase.java
+│   ├── port/out/OrderRepository.java
+│   └── service/OrderService.java
+├── adapter/                         # Interface Adapters layer
+│   ├── in/web/OrderController.java
+│   ├── in/messaging/OrderEventConsumer.java
+│   └── out/persistence/JpaOrderRepository.java
+└── infrastructure/                  # Frameworks & Drivers layer
+    ├── config/PersistenceConfig.java
+    └── config/SecurityConfig.java
+```
+
+---
+
+### 3.5 Microservices Architecture
+
+**Definition:** Application decomposed into small, independently deployable services, each owning its data and communicating over the network.
+
+```
+                        ┌──────────────┐
+Clients ──────────────► │ API Gateway  │
+                        └──────┬───────┘
+              ┌─────────────────┼──────────────────┐
+              ▼                 ▼                  ▼
+    ┌─────────────────┐ ┌─────────────┐  ┌──────────────────┐
+    │  Order Service  │ │  Inventory  │  │ Payment Service  │
+    │  (Spring Boot)  │ │  Service    │  │  (Spring Boot)   │
+    │  ┌───────────┐  │ │             │  │                  │
+    │  │ Orders DB │  │ │ Inventory DB│  │  Payments DB     │
+    │  │ (Postgres)│  │ │  (MySQL)    │  │  (Postgres)      │
+    │  └───────────┘  │ └─────────────┘  └──────────────────┘
+    └─────────────────┘
+```
+
+**Decomposition strategies:**
+- **By business capability** (recommended): Order Service, Inventory Service, Payment Service
+- **By subdomain (DDD)**: aligns with bounded contexts
+- **By volatility**: separate services that change at different rates
+- **Strangler Fig**: incrementally extract services from a monolith
+
+```java
+// Service-to-service communication — resilient REST client
+@Service
+public class InventoryClient {
+
+    private final WebClient webClient;
+    private final CircuitBreakerRegistry circuitBreakerRegistry;
+
+    public boolean reserve(UUID productId, int quantity) {
+        CircuitBreaker cb = circuitBreakerRegistry.circuitBreaker("inventory-service");
+
+        return cb.executeSupplier(() ->
+            webClient.post()
+                .uri("/api/inventory/reserve")
+                .bodyValue(new ReservationRequest(productId, quantity))
+                .retrieve()
+                .onStatus(HttpStatusCode::is5xxServerError, response ->
+                    Mono.error(new InventoryServiceException("Inventory service error")))
+                .bodyToMono(ReservationResponse.class)
+                .timeout(Duration.ofSeconds(3))
+                .map(ReservationResponse::success)
+                .block()
+        );
+    }
+}
+```
+
+**Data isolation patterns:**
+| Pattern | Description | Trade-off |
+|---------|-------------|-----------|
+| Database per service | Each service owns its DB | No joins, eventual consistency |
+| Schema per service | Separate schemas in shared DB | Easier ops, less isolation |
+| Shared database | Anti-pattern (tight coupling) | Avoid — defeats the purpose |
+
+**Service communication:**
+| Type | Technology | Use case |
+|------|-----------|----------|
+| Sync request/response | REST, gRPC | Real-time queries |
+| Async messaging | Kafka, RabbitMQ | Commands, events |
+| Service mesh | Istio, Linkerd | Cross-cutting concerns |
+
+**Common Pitfalls:**
+- **Distributed monolith**: services that must be deployed together or are tightly coupled via sync calls — worst of both worlds
+- **Chatty services**: 10 sync calls for one business operation = distributed performance nightmare
+- **Premature decomposition**: splitting before understanding domain boundaries = wrong boundaries = massive refactoring
+- **No contract testing**: Pact or Spring Cloud Contract essential — consumer-driven contract testing prevents breaking changes
+
+---
+
+### 3.6 Event-Driven Architecture (EDA)
+
+**Definition:** Components communicate by emitting and reacting to events. Producers emit events without knowing consumers. Consumers react independently.
+
+```
+┌─────────────┐      event       ┌─────────────────┐
+│ Order       │────────────────► │  Event Broker   │
+│ Service     │  OrderPlaced     │  (Kafka)        │
+└─────────────┘                  └────────┬────────┘
+                                          │
+                    ┌─────────────────────┼────────────────────┐
+                    ▼                     ▼                    ▼
+           ┌─────────────┐      ┌─────────────────┐   ┌──────────────┐
+           │ Inventory   │      │ Payment Service  │   │Notification  │
+           │ Service     │      │                 │   │Service       │
+           │ (reserves)  │      │ (charges card)  │   │(sends email) │
+           └─────────────┘      └─────────────────┘   └──────────────┘
+```
+
+**Event types:**
+- **Domain Event**: something that happened in the domain (`OrderPlaced`, `PaymentProcessed`)
+- **Event Notification**: thin event, consumers query for details
+- **Event-Carried State Transfer**: fat event, contains all necessary data (preferred — avoids query-back)
+- **Event Sourcing**: events ARE the source of truth (not just notifications)
+
+```java
+// Domain event definition
+public record OrderPlaced(
+    UUID orderId,
+    UUID customerId,
+    List<OrderLineDTO> lines,
+    Money totalAmount,
+    Instant occurredAt
+) implements DomainEvent {
+    public String topic() { return "orders.placed"; }
+}
+
+// Event producer (Kafka)
+@Service
+public class OrderEventPublisher {
+
+    private final KafkaTemplate<String, Object> kafkaTemplate;
+
+    public void publish(OrderPlaced event) {
+        kafkaTemplate.send(
+            event.topic(),
+            event.orderId().toString(),    // partition key — all events for same order → same partition
+            event
+        ).whenComplete((result, ex) -> {
+            if (ex != null) {
+                log.error("Failed to publish event orderId={}", event.orderId(), ex);
+                // Outbox pattern handles this — see below
+            }
+        });
+    }
+}
+
+// Event consumer
+@Component
+public class InventoryEventConsumer {
+
+    @KafkaListener(
+        topics = "orders.placed",
+        groupId = "inventory-service",
+        containerFactory = "kafkaListenerContainerFactory"
+    )
+    public void handle(OrderPlaced event, Acknowledgment ack) {
+        try {
+            inventoryService.reserve(event.orderId(), event.lines());
+            ack.acknowledge();   // manual ack only after successful processing
+        } catch (InsufficientStockException e) {
+            // publish OrderReservationFailed — compensating event
+            eventPublisher.publish(new OrderReservationFailed(event.orderId(), e.getMessage()));
+            ack.acknowledge();   // still ack — don't retry inventory failures
+        } catch (TransientException e) {
+            // don't ack — let Kafka retry
+            log.warn("Transient error, will retry: {}", e.getMessage());
+        }
+    }
+}
+```
+
+**Transactional Outbox Pattern — guaranteed event delivery:**
+```java
+// Problem: save order + publish event must be atomic
+// Solution: write event to outbox table in same DB transaction
+
+@Transactional
+public void createOrder(CreateOrderCommand command) {
+    Order order = Order.create(command);
+    orderRepository.save(order);
+
+    // Write to outbox IN SAME TRANSACTION — never lost
+    outboxRepository.save(new OutboxEvent(
+        UUID.randomUUID(),
+        "orders.placed",
+        order.getId().toString(),
+        serialize(new OrderPlaced(order))
+    ));
+    // Separate process (CDC/polling) reads outbox → publishes to Kafka
+}
+```
+
+**CDC (Change Data Capture) with Debezium:**
+```
+PostgreSQL WAL ──► Debezium ──► Kafka (outbox.events topic) ──► consumers
+                  (reads changes                               (receive events)
+                   from DB log)
+```
+
+**Common Pitfalls:**
+- **Dual write problem**: writing to DB and Kafka without outbox → events can be lost on crash
+- **Event schema evolution**: consumers break when producers add/remove fields — use Avro + Schema Registry or design for backward/forward compatibility
+- **Consumer idempotency**: Kafka delivers at-least-once — consumers must handle duplicates (idempotency key)
+
+---
+
+### 3.7 Reactive Architecture
+
+**Definition:** Architecture built around reactive streams — asynchronous, non-blocking, back-pressure-aware data flows.
+
+**Reactive Manifesto pillars:** Responsive, Resilient, Elastic, Message-Driven
+
+```
+Traditional (thread-per-request):
+Request ──► Thread (blocked on DB) ──► Response
+            └── Thread is idle, wasting memory
+
+Reactive (event-loop):
+Request ──► Event Loop ──► (async DB call) ──► callback ──► Response
+            └── Event loop handles other requests while waiting
+```
+
+```java
+// Spring WebFlux — reactive REST endpoint
+@RestController
+@RequestMapping("/api/orders")
+public class ReactiveOrderController {
+
+    private final ReactiveOrderService orderService;
+
+    @GetMapping("/{orderId}")
+    public Mono<OrderResponse> getOrder(@PathVariable UUID orderId) {
+        return orderService.findById(orderId)
+            .map(OrderResponse::from)
+            .switchIfEmpty(Mono.error(new OrderNotFoundException(orderId)));
+    }
+
+    @GetMapping("/customer/{customerId}")
+    public Flux<OrderResponse> getCustomerOrders(@PathVariable UUID customerId) {
+        return orderService.findByCustomer(customerId)
+            .map(OrderResponse::from);
+    }
+
+    // Reactive composition — parallel calls
+    @GetMapping("/{orderId}/enriched")
+    public Mono<EnrichedOrderResponse> getEnrichedOrder(@PathVariable UUID orderId) {
+        return Mono.zip(
+            orderService.findById(orderId),
+            customerService.findById(orderId).defaultIfEmpty(Customer.unknown()),
+            inventoryService.getStatus(orderId)
+        ).map(tuple -> EnrichedOrderResponse.from(
+            tuple.getT1(), tuple.getT2(), tuple.getT3()
+        ));
+    }
+}
+
+// Back-pressure example
+@Service
+public class OrderExportService {
+
+    public Flux<Order> exportOrders(LocalDate from, LocalDate to) {
+        return orderRepository.findByDateRange(from, to)  // returns Flux
+            .buffer(100)                                   // batch 100 orders
+            .flatMap(batch -> exportService.write(batch), 4)  // 4 concurrent exports
+            .onBackpressureBuffer(1000,                   // buffer up to 1000 batches
+                dropped -> log.warn("Backpressure: dropped batch"))
+            .doOnError(e -> log.error("Export failed", e))
+            .retryWhen(Retry.backoff(3, Duration.ofSeconds(1)));
+    }
+}
+```
+
+**R2DBC — reactive database access:**
+```java
+// Reactive JPA doesn't exist — use R2DBC for truly reactive DB access
+public interface ReactiveOrderRepository extends ReactiveCrudRepository<OrderEntity, UUID> {
+    Flux<OrderEntity> findByCustomerId(UUID customerId);
+
+    @Query("SELECT * FROM orders WHERE status = :status AND created_at > :since")
+    Flux<OrderEntity> findRecentByStatus(String status, LocalDateTime since);
+}
+```
+
+**Key Details:**
+- Reactive is NOT always faster — it's about resource efficiency at scale
+- Best for: I/O-bound operations, high concurrency, streaming
+- Not good for: CPU-intensive work (blocking the event loop is catastrophic)
+- Learning curve is steep — debugging reactive pipelines requires discipline
+- `block()` in a reactive context is a code smell and can cause deadlocks
+
+**Common Pitfalls:**
+- Blocking inside reactive pipeline: `webClient.get()...block()` inside a `Flux.flatMap()`
+- Not handling back-pressure — unbounded queues lead to OOM
+- Over-using reactive for simple CRUD — adds complexity without benefit
+
+---
+
+### 3.8 Domain-Driven Design (DDD)
+
+**Definition:** Software design approach focused on modeling the domain (business problem) as the primary driver of technical design.
+
+**Strategic DDD:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DOMAIN                                       │
+│  ┌──────────────────┐    ┌──────────────────┐                  │
+│  │  Order Context   │    │  Catalog Context  │                  │
+│  │                  │◄──►│                  │  (via ACL)       │
+│  │  Order           │    │  Product         │                  │
+│  │  Customer (thin) │    │  Customer (rich) │ ← same word,     │
+│  └──────────────────┘    └──────────────────┘   different meaning
+│                                                                 │
+│  ┌──────────────────┐    ┌──────────────────┐                  │
+│  │ Payment Context  │    │ Shipping Context  │                  │
+│  └──────────────────┘    └──────────────────┘                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Bounded Context:** a linguistic boundary where a term has a single, unambiguous meaning. "Customer" in Order Context = buyer; in Loyalty Context = points-holder. Don't share the model across contexts.
+
+**Context Map relationships:**
+| Relationship | Description |
+|-------------|-------------|
+| Partnership | Two contexts evolve together |
+| Shared Kernel | Shared subset of domain model |
+| Customer-Supplier | Downstream context is customer of upstream |
+| Conformist | Downstream conforms to upstream model |
+| ACL (Anti-Corruption Layer) | Translates between models |
+| Open Host Service | Upstream publishes stable protocol |
+| Published Language | Shared language (Avro schema, Protobuf) |
+
+**Tactical DDD building blocks:**
+```java
+// VALUE OBJECT — equality by value, immutable
+public record Money(BigDecimal amount, Currency currency) {
+    public Money {
+        Objects.requireNonNull(amount);
+        Objects.requireNonNull(currency);
+        if (amount.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalArgumentException("Money cannot be negative");
+        }
+    }
+
+    public Money add(Money other) {
+        if (!this.currency.equals(other.currency)) {
+            throw new CurrencyMismatchException();
+        }
+        return new Money(this.amount.add(other.amount), this.currency);
+    }
+}
+
+// ENTITY — equality by identity, mutable
+public class Order {
+    private final OrderId id;          // strongly-typed ID
+    private OrderStatus status;
+    private List<OrderLine> lines;
+
+    // Business behavior on the entity
+    public void addLine(Product product, int quantity) {
+        if (status != OrderStatus.DRAFT) {
+            throw new OrderNotEditableException(id);
+        }
+        lines.add(new OrderLine(product.getId(), product.getPrice(), quantity));
+    }
+}
+
+// AGGREGATE — consistency boundary, accessed via root
+public class Order {  // AGGREGATE ROOT
+    private OrderId id;
+    private List<OrderLine> lines;   // OrderLine only accessed through Order
+
+    // Invariant: total lines <= 50
+    public void addLine(OrderLine line) {
+        if (lines.size() >= 50) {
+            throw new OrderLineLimitExceededException();
+        }
+        lines.add(line);
+    }
+}
+
+// REPOSITORY — collection-like interface for aggregates
+public interface OrderRepository {
+    void save(Order order);
+    Optional<Order> findById(OrderId id);
+    // Never: List<OrderLine> findLinesByProductId(ProductId id) — bypass aggregate
+}
+
+// DOMAIN SERVICE — operations spanning multiple aggregates
+@DomainService
+public class OrderTransferService {
+    public void transfer(Order from, Order to, List<OrderLineId> lineIds) {
+        List<OrderLine> lines = from.removeLines(lineIds);
+        to.addLines(lines);
+        // Both aggregates modified — cannot belong to either; hence domain service
+    }
+}
+```
+
+**Common Pitfalls:**
+- Anemic domain model: all logic in services, entities are just getters/setters
+- Large aggregates: loading 1000 order lines for every operation
+- Exposing aggregate internals: `order.getLines().add(line)` — bypasses invariants
+
+---
+
+### 3.9 CQRS Architecture
+
+**Definition:** Command Query Responsibility Segregation — split the write model (commands) from the read model (queries). Different models optimized for different purposes.
+
+```
+                    WRITE SIDE                    READ SIDE
+                  (Commands)                    (Queries)
+                      │                              │
+ CreateOrder ────────►│                              │◄──── GetOrdersByCustomer
+ UpdateOrder ────────►│  Domain Model                │◄──── GetOrderDashboard
+ CancelOrder ────────►│  (normalized, consistent)    │
+                      │                              │
+                      │──── events ─────────────────►│  Read Models
+                      │   (OrderCreated,             │  (denormalized,
+                      │    OrderUpdated)             │   optimized views)
+                      │                              │
+                  Write DB                       Read DB
+                 (PostgreSQL)                   (Elasticsearch /
+                                                Redis / MongoDB)
+```
+
+```java
+// COMMAND side
+public record CreateOrderCommand(UUID customerId, List<OrderLineRequest> lines) {}
+
+@CommandHandler
+@Service
+public class OrderCommandService {
+
+    private final OrderRepository orderRepository;
+    private final ApplicationEventPublisher eventPublisher;
+
+    @Transactional
+    public UUID handle(CreateOrderCommand command) {
+        Order order = Order.create(command.customerId(), command.lines());
+        orderRepository.save(order);
+        eventPublisher.publishEvent(new OrderCreatedEvent(order));
+        return order.getId().value();
+    }
+}
+
+// QUERY side — separate, optimized read model
+@Document(indexName = "orders")   // Elasticsearch
+public class OrderSummaryDocument {
+    private String orderId;
+    private String customerName;   // denormalized from Customer
+    private String customerEmail;  // no join needed
+    private int lineCount;
+    private BigDecimal totalAmount;
+    private String status;
+    private Instant createdAt;
+}
+
+@QueryHandler
+@Service
+public class OrderQueryService {
+
+    private final OrderSearchRepository searchRepository; // Elasticsearch repo
+
+    public Page<OrderSummaryDocument> findByCustomer(UUID customerId, Pageable pageable) {
+        return searchRepository.findByCustomerId(customerId.toString(), pageable);
+    }
+
+    public OrderDashboard getDashboard(LocalDate from, LocalDate to) {
+        return searchRepository.aggregateDashboard(from, to);  // Elasticsearch aggregation
+    }
+}
+
+// EVENT HANDLER — synchronizes write model → read model
+@Component
+public class OrderProjection {
+
+    private final OrderSummaryRepository readRepository;
+    private final CustomerQueryClient customerClient;
+
+    @EventListener
+    @Async
+    public void on(OrderCreatedEvent event) {
+        Order order = event.getOrder();
+        Customer customer = customerClient.findById(order.getCustomerId());
+
+        OrderSummaryDocument doc = new OrderSummaryDocument();
+        doc.setOrderId(order.getId().toString());
+        doc.setCustomerName(customer.getFullName());    // denormalized
+        doc.setCustomerEmail(customer.getEmail());      // denormalized
+        doc.setLineCount(order.getLines().size());
+        doc.setTotalAmount(order.getTotalAmount().getAmount());
+        doc.setStatus(order.getStatus().name());
+        doc.setCreatedAt(order.getCreatedAt());
+
+        readRepository.save(doc);
+    }
+}
+```
+
+**Key Details:**
+- Read and write models can use different databases
+- Read model is eventually consistent (acceptable for most query scenarios)
+- Commands return IDs or void — never return data (that's a query's job)
+- Significant complexity overhead — use only when read/write performance profiles differ dramatically
+- CQRS + Event Sourcing is a natural pairing but CQRS does NOT require Event Sourcing
+
+**Common Pitfalls:**
+- Using CQRS for simple CRUD — massive over-engineering
+- Forgetting that read models are eventually consistent — UI must handle this (optimistic updates)
+- Commands that return rich data — blurs the boundary
+
+---
+
+### 3.10 Saga Pattern
+
+**Definition:** Manage distributed transactions across multiple services through a sequence of local transactions and compensating transactions for rollback.
+
+**Two implementations:**
+
+#### Choreography-based Saga
+```
+Order Service        Inventory Service      Payment Service
+     │                      │                    │
+     │─── OrderCreated ─────►│                   │
+     │                      │─── StockReserved──►│
+     │                      │                    │──── PaymentProcessed
+     │◄──────────────────────────────────────────│
+(OrderConfirmed)
+     │
+     │   IF PAYMENT FAILS:
+     │◄────────────────── PaymentFailed ──────────│
+     │─── OrderCancelled ─►│
+                           │ (StockReleased — compensating transaction)
+```
+
+```java
+// Choreography: each service listens to events and reacts
+@Component
+public class InventoryService {
+
+    @KafkaListener(topics = "orders.created")
+    public void onOrderCreated(OrderCreatedEvent event) {
+        try {
+            reserve(event.orderId(), event.lines());
+            eventPublisher.publish(new StockReservedEvent(event.orderId()));
+        } catch (InsufficientStockException e) {
+            eventPublisher.publish(new StockReservationFailedEvent(event.orderId(), e.getReason()));
+        }
+    }
+
+    @KafkaListener(topics = "payments.failed")
+    public void onPaymentFailed(PaymentFailedEvent event) {
+        // COMPENSATING TRANSACTION
+        release(event.orderId());
+        eventPublisher.publish(new StockReleasedEvent(event.orderId()));
+    }
+}
+```
+
+#### Orchestration-based Saga
+```
+┌─────────────────────────────────────────────────────────┐
+│                   SAGA ORCHESTRATOR                     │
+│                   (Order Saga)                          │
+│                                                         │
+│  step 1: ReserveStock ──────────────────────────────►   │
+│          ◄── StockReserved or StockReservationFailed     │
+│  step 2: ProcessPayment ───────────────────────────►    │
+│          ◄── PaymentProcessed or PaymentFailed          │
+│  step 3: ConfirmOrder ─────────────────────────────►    │
+│                                                         │
+│  On failure:                                            │
+│  compensate: ReleaseStock ─────────────────────────►    │
+│  compensate: RefundPayment ────────────────────────►    │
+└─────────────────────────────────────────────────────────┘
+```
+
+```java
+// Orchestration with Axon Framework (or custom state machine)
+@Saga
+public class OrderFulfillmentSaga {
+
+    @Autowired
+    private transient CommandGateway commandGateway;
+
+    private UUID orderId;
+    private UUID inventoryReservationId;
+
+    @StartSaga
+    @SagaEventHandler(associationProperty = "orderId")
+    public void on(OrderCreatedEvent event) {
+        this.orderId = event.orderId();
+        commandGateway.send(new ReserveStockCommand(event.orderId(), event.lines()));
+    }
+
+    @SagaEventHandler(associationProperty = "orderId")
+    public void on(StockReservedEvent event) {
+        this.inventoryReservationId = event.reservationId();
+        commandGateway.send(new ProcessPaymentCommand(orderId, event.totalAmount()));
+    }
+
+    @SagaEventHandler(associationProperty = "orderId")
+    public void on(PaymentFailedEvent event) {
+        // COMPENSATE
+        commandGateway.send(new ReleaseStockCommand(inventoryReservationId));
+        commandGateway.send(new CancelOrderCommand(orderId, event.reason()));
+        SagaLifecycle.end();
+    }
+
+    @EndSaga
+    @SagaEventHandler(associationProperty = "orderId")
+    public void on(OrderConfirmedEvent event) {
+        // Happy path complete — saga ends
+    }
+}
+```
+
+**Choreography vs Orchestration:**
+| Aspect | Choreography | Orchestration |
+|--------|-------------|---------------|
+| Coupling | Low (event-based) | Medium (orchestrator knows steps) |
+| Visibility | Hard — flow is implicit | Easy — flow is explicit |
+| Debugging | Complex | Simpler |
+| Single point of failure | No | Orchestrator (mitigated by persistence) |
+| Best for | Simple, stable flows | Complex, many-step flows |
+
+**Common Pitfalls:**
+- No idempotency in saga steps — Kafka delivers at-least-once, compensating transactions may run twice
+- Saga state not persisted — orchestrator crash loses saga state (use event-sourced saga state)
+- No timeout handling — saga can hang indefinitely if a service never responds
+
+---
+
+### 3.11 Serverless Java Architecture
+
+**Definition:** Deploy functions (not services) that are executed on-demand. Infrastructure managed by cloud provider.
+
+```
+HTTP Request ──► API Gateway ──► Lambda Function (Java)
+                                        │
+                                        ├──► DynamoDB
+                                        ├──► SQS
+                                        └──► S3
+```
+
+**Java Cold Start Problem:**
+```
+Cold start breakdown:
+JVM startup:          ~300ms
+Spring Boot init:     ~2000ms  ← the killer
+Handler execution:    ~50ms
+Total cold start:     ~2350ms  ← unacceptable for many use cases
+```
+
+**Solutions:**
+```java
+// 1. GraalVM Native Image (Spring Native / Quarkus / Micronaut)
+// Compile to native binary — cold start <100ms, smaller memory
+// quarkus-maven-plugin for native compilation:
+// mvn package -Pnative
+
+// 2. Minimize Spring context with Spring Cloud Function
+@SpringBootApplication
+public class OrderFunctionApp {
+    // Minimal context — no web server, no full auto-configuration
+    @Bean
+    public Function<OrderRequest, OrderResponse> processOrder(OrderService service) {
+        return request -> service.process(request);
+    }
+}
+
+// 3. AWS Lambda SnapStart (Java 21)
+// Snapshot JVM state after initialization, restore on invocation
+// Add to SAM/CloudFormation:
+// SnapStart:
+//   ApplyOn: PublishedVersions
+```
+
+**Quarkus — cloud-native Java:**
+```java
+@Path("/orders")
+@ApplicationScoped
+public class OrderResource {
+
+    @Inject
+    OrderService orderService;
+
+    @POST
+    @Transactional
+    public Response createOrder(CreateOrderRequest request) {
+        Order order = orderService.create(request);
+        return Response.status(201).entity(order).build();
+    }
+}
+// quarkus dev — live reload in <100ms
+// quarkus build --native — native binary, cold start ~10ms
+```
+
+**Key Details:**
+- Function should be stateless — no in-memory state between invocations
+- Concurrency model: each Lambda invocation is isolated (no shared state between concurrent invocations)
+- Pricing: pay per invocation + duration (100ms increments)
+- Not suited for: long-running operations, CPU-intensive tasks, WebSocket
+
+---
+
+### 3.12 Cloud-Native Java Design
+
+**12-Factor App principles for Java:**
+| Factor | Java Implementation |
+|--------|-------------------|
+| Codebase | One repo, multiple deploys via env vars |
+| Dependencies | Maven/Gradle — no system-level dependencies |
+| Config | Environment variables / Kubernetes ConfigMaps |
+| Backing services | Injected via env vars — DB URL, Redis URL |
+| Build/Release/Run | Docker multi-stage build, separate stages |
+| Processes | Stateless — session in Redis, not in-memory |
+| Port binding | Embedded Tomcat — app IS the server |
+| Concurrency | Scale via more pods, not bigger pods |
+| Disposability | Fast startup, graceful shutdown |
+| Dev/Prod parity | Docker — same image in all environments |
+| Logs | Write to stdout — log aggregation handles the rest |
+| Admin processes | One-off jobs via Kubernetes Jobs |
+
+```yaml
+# Dockerfile — multi-stage build
+FROM eclipse-temurin:21-jdk-alpine AS builder
+WORKDIR /app
+COPY pom.xml .
+RUN mvn dependency:go-offline    # cache deps layer
+COPY src ./src
+RUN mvn package -DskipTests
+
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+# Non-root user for security
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+
+COPY --from=builder /app/target/*.jar app.jar
+
+# Tune JVM for containers
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0 \
+               -XX:+UseContainerSupport \
+               -XX:+ExitOnOutOfMemoryError \
+               -Djava.security.egd=file:/dev/./urandom"
+
+EXPOSE 8080
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+```
+
+```yaml
+# application.yml — externalized config
+spring:
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+  redis:
+    host: ${REDIS_HOST}
+
+# Graceful shutdown
+server:
+  shutdown: graceful
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+```
+
+**JVM container tuning:**
+```bash
+# Modern JVM (11+) is container-aware — use these flags:
+-XX:+UseContainerSupport           # Use cgroup limits (default in JDK 11+)
+-XX:MaxRAMPercentage=75.0          # Use 75% of container memory for heap
+-XX:InitialRAMPercentage=50.0      # Start heap at 50%
+-XX:+ExitOnOutOfMemoryError        # Let K8s restart on OOM (cleaner than zombie)
+-XX:+UseG1GC                       # G1 for most workloads
+-XX:+UseZGC                        # ZGC for low-latency (JDK 15+, <1ms pauses)
+```
+
+---
+
+### 3.13 Resilience Architecture
+
+**Definition:** Ability of a system to maintain acceptable behavior in the presence of failures.
+
+**Resilience4j — the standard Java resilience library:**
+
+```java
+// application.yml — Resilience4j config
+resilience4j:
+  circuitbreaker:
+    instances:
+      payment-service:
+        registerHealthIndicator: true
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 20
+        failureRateThreshold: 50       # Open circuit at 50% failures
+        waitDurationInOpenState: 30s   # Wait 30s before trying again
+        permittedNumberOfCallsInHalfOpenState: 5
+        minimumNumberOfCalls: 10
+  retry:
+    instances:
+      payment-service:
+        maxAttempts: 3
+        waitDuration: 500ms
+        exponentialBackoffMultiplier: 2
+        retryExceptions:
+          - java.net.ConnectException
+          - java.util.concurrent.TimeoutException
+        ignoreExceptions:
+          - com.example.PaymentDeclinedException  # Don't retry business errors
+  bulkhead:
+    instances:
+      payment-service:
+        maxConcurrentCalls: 20   # Max concurrent calls to payment service
+        maxWaitDuration: 100ms
+  timelimiter:
+    instances:
+      payment-service:
+        timeoutDuration: 3s
+```
+
+```java
+@Service
+public class PaymentClient {
+
+    private final WebClient webClient;
+
+    @CircuitBreaker(name = "payment-service", fallbackMethod = "paymentFallback")
+    @Retry(name = "payment-service")
+    @Bulkhead(name = "payment-service")
+    @TimeLimiter(name = "payment-service")
+    public CompletableFuture<PaymentResult> charge(PaymentRequest request) {
+        return webClient.post()
+            .uri("/charge")
+            .bodyValue(request)
+            .retrieve()
+            .bodyToMono(PaymentResult.class)
+            .toFuture();
+    }
+
+    // Fallback — called when circuit is open or all retries exhausted
+    private CompletableFuture<PaymentResult> paymentFallback(
+            PaymentRequest request, Throwable ex) {
+        log.warn("Payment service unavailable, queuing for retry: {}", ex.getMessage());
+        // Put in persistent retry queue for async processing
+        retryQueue.enqueue(request);
+        return CompletableFuture.completedFuture(PaymentResult.pending());
+    }
+}
+```
+
+**Resilience patterns summary:**
+| Pattern | Problem solved | Trade-off |
+|---------|---------------|-----------|
+| Circuit Breaker | Cascading failures | Fail-fast; need fallback |
+| Retry | Transient failures | Risk retry storms |
+| Bulkhead | Resource exhaustion from one consumer | Wasted capacity |
+| Timeout | Slow responses holding threads | False timeouts under load |
+| Rate Limiter | Overloading downstream | Legitimate requests rejected |
+| Fallback | Service unavailable | Data may be stale/incomplete |
+
+**Retry storm prevention:**
+```java
+// Exponential backoff + jitter prevents thundering herd
+RetryConfig config = RetryConfig.custom()
+    .maxAttempts(5)
+    .intervalFunction(IntervalFunction.ofExponentialRandomBackoff(
+        Duration.ofMillis(100),  // initial interval
+        2.0,                      // multiplier
+        Duration.ofSeconds(10)   // max interval
+    ))
+    .build();
+```
+
+---
+
+### 3.14 Scalability Patterns
+
+**Horizontal vs Vertical scaling:**
+```
+Vertical (scale up):   1 server × 64 cores, 256GB RAM
+Horizontal (scale out): 32 servers × 2 cores, 8GB RAM  ← preferred
+```
+
+**Stateless design for horizontal scaling:**
+```java
+// BAD — in-memory session (breaks with multiple instances)
+HttpSession session = request.getSession();
+session.setAttribute("cart", cart);
+
+// GOOD — session in Redis (shared across all instances)
+@Configuration
+@EnableRedisHttpSession(maxInactiveIntervalInSeconds = 1800)
+public class SessionConfig {}
+// Spring Session automatically stores session in Redis
+```
+
+**Database scaling patterns:**
+```
+Read Replicas:
+┌────────────────────────────────────────────────────┐
+│ All WRITES ──► Primary DB                          │
+│ All READS  ──► Read Replica 1                      │
+│             ──► Read Replica 2   (round-robin)     │
+│             ──► Read Replica 3                     │
+└────────────────────────────────────────────────────┘
+
+Sharding (horizontal partitioning):
+┌────────────────────────────────────────────────────┐
+│ userId 0-33%   ──► Shard 1                         │
+│ userId 34-66%  ──► Shard 2                         │
+│ userId 67-100% ──► Shard 3                         │
+└────────────────────────────────────────────────────┘
+Shard key choice is critical — avoid hot shards
+```
+
+```java
+// Read/Write routing with Spring
+@Configuration
+public class DataSourceConfig {
+
+    @Bean
+    @Primary
+    public DataSource routingDataSource(
+            @Qualifier("primary") DataSource primary,
+            @Qualifier("replica") DataSource replica) {
+        return new AbstractRoutingDataSource() {
+            @Override
+            protected Object determineCurrentLookupKey() {
+                return TransactionSynchronizationManager.isCurrentTransactionReadOnly()
+                    ? "replica" : "primary";
+            }
+        };
+    }
+}
+
+// Usage — @Transactional(readOnly=true) routes to replica
+@Transactional(readOnly = true)
+public List<Order> findOrdersByCustomer(UUID customerId) {
+    return orderRepository.findByCustomerId(customerId);
+}
+```
+
+**Async processing for scalability:**
+```java
+// Instead of synchronous processing that ties up threads:
+// Write ──► DB ──► synchronous downstream calls ──► response
+
+// Async: write fast, process later
+@PostMapping("/orders")
+public ResponseEntity<String> createOrder(@RequestBody CreateOrderRequest request) {
+    String orderId = UUID.randomUUID().toString();
+    // Instant acknowledgement
+    commandQueue.send(new CreateOrderCommand(orderId, request));
+    return ResponseEntity.accepted()
+        .header("Location", "/api/orders/" + orderId)
+        .body(orderId);
+}
+```
+
+---
+
+### 3.15 Data Consistency Models
+
+**The CAP Theorem:**
+```
+           Consistency
+                │
+                │   CA        CP
+                │
+Availability────┼────────────────── Partition Tolerance
+                │
+                │   AP
+```
+In a distributed system, network partitions WILL happen. So the real choice is CP vs AP.
+
+**Consistency spectrum:**
+```
+Strong ──────────────────────────────────────────► Eventual
+(ACID)    Read-your-writes   Monotonic   Session   (BASE)
+          consistency        reads       consistency
+
+Postgres   Master reads      Replica     Sticky     Cassandra
+           only              ordering    sessions   DynamoDB
+```
+
+**Concurrency control:**
+```java
+// Optimistic Locking (JPA) — no DB lock, detect conflicts on commit
+@Entity
+public class Order {
+    @Version
+    private Long version;    // JPA increments on every update
+    // ...
+}
+
+// If two threads read version=5 and both try to update:
+// First commit: version 5 → 6, succeeds
+// Second commit: expects version=5, finds version=6 → OptimisticLockException
+// Retry logic required
+
+// Pessimistic Locking — DB-level row lock
+@Repository
+public interface OrderRepository extends JpaRepository<Order, UUID> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT o FROM Order o WHERE o.id = :id")
+    Optional<Order> findByIdWithLock(@Param("id") UUID id);
+}
+
+// Idempotency — safe to retry
+@Transactional
+public PaymentResult processPayment(UUID idempotencyKey, PaymentRequest request) {
+    // Check if already processed
+    return paymentResultRepository.findByIdempotencyKey(idempotencyKey)
+        .orElseGet(() -> {
+            PaymentResult result = doProcess(request);
+            result.setIdempotencyKey(idempotencyKey);
+            return paymentResultRepository.save(result);  // unique constraint on idempotencyKey
+        });
+}
+```
+
+**Two-phase commit (2PC) vs Saga:**
+| | 2PC | Saga |
+|-|-----|------|
+| Consistency | Strong (ACID) | Eventual |
+| Availability | Lower (locks held) | Higher |
+| Failure handling | Coordinator SPOF | Compensating transactions |
+| Performance | Higher latency | Lower latency |
+| Use case | Same DB, single service | Cross-service |
+
+---
+
+### 3.16 Caching Architecture
+
+**Cache topology patterns:**
+```
+Cache-Aside (Lazy Loading) — most common:
+App ──► Cache HIT? ──► return cached value
+           └── MISS ──► load from DB ──► write to cache ──► return
+
+Write-Through:
+App ──► write to Cache AND DB synchronously
+
+Write-Behind (Write-Back):
+App ──► write to Cache ──► async write to DB (risk: cache loss = data loss)
+
+Read-Through:
+Cache loads from DB automatically on miss (cache is the primary interface)
+```
+
+```java
+// Spring Cache abstraction — vendor-neutral
+@Service
+public class ProductService {
+
+    @Cacheable(
+        value = "products",
+        key = "#productId",
+        condition = "#productId != null",
+        unless = "#result == null"  // don't cache null (negative caching is separate concern)
+    )
+    public Product findById(UUID productId) {
+        return productRepository.findById(productId)
+            .orElseThrow(() -> new ProductNotFoundException(productId));
+    }
+
+    @CachePut(value = "products", key = "#product.id")
+    public Product updateProduct(Product product) {
+        return productRepository.save(product);
+    }
+
+    @CacheEvict(value = "products", key = "#productId")
+    public void deleteProduct(UUID productId) {
+        productRepository.deleteById(productId);
+    }
+
+    // Evict all entries in a cache
+    @CacheEvict(value = "products", allEntries = true)
+    @Scheduled(fixedDelay = 600_000)  // every 10 minutes
+    public void evictProductCache() {}
+}
+
+// Caffeine — in-process cache config
+@Configuration
+@EnableCaching
+public class CacheConfig {
+
+    @Bean
+    public CacheManager cacheManager() {
+        CaffeineCacheManager cacheManager = new CaffeineCacheManager();
+        cacheManager.setCaffeine(Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(Duration.ofMinutes(10))
+            .expireAfterAccess(Duration.ofMinutes(5))
+            .recordStats()               // expose cache stats to Micrometer
+        );
+        return cacheManager;
+    }
+}
+```
+
+**Redis distributed cache:**
+```java
+// Redis with custom serialization
+@Configuration
+public class RedisConfig {
+
+    @Bean
+    public RedisCacheManager cacheManager(RedisConnectionFactory factory) {
+        Jackson2JsonRedisSerializer<Object> serializer =
+            new Jackson2JsonRedisSerializer<>(Object.class);
+
+        RedisCacheConfiguration config = RedisCacheConfiguration.defaultCacheConfig()
+            .entryTtl(Duration.ofMinutes(10))
+            .serializeValuesWith(
+                RedisSerializationContext.SerializationPair.fromSerializer(serializer))
+            .disableCachingNullValues();
+
+        return RedisCacheManager.builder(factory)
+            .cacheDefaults(config)
+            .withCacheConfiguration("products", config.entryTtl(Duration.ofHours(1)))
+            .withCacheConfiguration("sessions", config.entryTtl(Duration.ofMinutes(30)))
+            .build();
+    }
+}
+```
+
+**Cache stampede / thundering herd prevention:**
+```java
+// Problem: cache expires, 1000 concurrent requests all go to DB
+// Solution 1: Probabilistic early expiration (refresh before expiry)
+// Solution 2: Lock-based cache loading
+
+private final Cache<UUID, Product> localCache = Caffeine.newBuilder()
+    .maximumSize(1000)
+    .build();
+
+private final ConcurrentHashMap<UUID, CompletableFuture<Product>> loadingFutures
+    = new ConcurrentHashMap<>();
+
+public Product findById(UUID id) {
+    Product cached = localCache.getIfPresent(id);
+    if (cached != null) return cached;
+
+    // Only ONE thread loads from DB; others wait for the same future
+    CompletableFuture<Product> future = loadingFutures.computeIfAbsent(id, key ->
+        CompletableFuture.supplyAsync(() -> {
+            Product product = productRepository.findById(key).orElseThrow();
+            localCache.put(key, product);
+            loadingFutures.remove(key);
+            return product;
+        })
+    );
+
+    return future.join();
+}
+```
+
+**Cache consistency strategies:**
+| Strategy | Consistency | Complexity |
+|----------|-------------|-----------|
+| TTL-based expiry | Eventual | Low |
+| Event-driven eviction | Near real-time | Medium |
+| Write-through | Strong | Medium |
+| Read-through | Eventual | Low |
+| Cache-aside + events | Near real-time | Medium |
+
+**Common Pitfalls:**
+- Cache key collisions: `@Cacheable(key = "#id")` — if two methods use same cache name and same ID type, they conflict. Use specific names.
+- Serialization issues: complex objects with JPA lazy proxies can't be serialized to Redis
+- Infinite TTL: stale data lives forever — always set a TTL
+- Caching mutable shared state: cache should store immutable snapshots
+
+---
+
+## 4. Interview Questions & Answers
+
+**Q1: When would you choose a monolith over microservices?**
+
+> Always start with a monolith unless you have proven reasons not to. Microservices require: a well-understood domain (wrong boundaries are expensive to fix), operational maturity (CI/CD, container orchestration, distributed tracing, service mesh), and team structure aligned with service ownership (Conway's Law). For startups, small teams (<10 engineers), or poorly-understood domains, a well-structured modular monolith with Java modules enforcing boundaries delivers faster development speed, simpler debugging, no distributed systems complexity, and easy refactoring. Extract services when you have concrete pain: an independent scaling need, separate deployment lifecycle, or team ownership boundary.
+
+---
+
+**Q2: What's the difference between Hexagonal and Clean Architecture?**
+
+> They solve the same problem — isolating the domain from infrastructure — but at different levels of formality. Hexagonal defines the structural pattern: domain at center, ports as interfaces, adapters as implementations. Clean Architecture adds explicit layering (Entities, Use Cases, Interface Adapters, Frameworks) and formalizes the Dependency Rule: source code dependencies can only point inward. Hexagonal doesn't mandate separate layers for entities vs use cases. In practice, Clean Architecture is a refinement of Hexagonal — you can implement Clean Architecture using Hexagonal structure. Both result in the same key benefit: domain is testable in isolation, infrastructure is swappable.
+
+---
+
+**Q3: Explain the Transactional Outbox pattern and why it's necessary.**
+
+> The dual-write problem: you need to save an order to PostgreSQL AND publish an `OrderPlaced` event to Kafka. If you do them separately, you can save to DB but then crash before publishing — or publish to Kafka but then DB rollback. Neither two-phase commit across DB + Kafka nor compensating transactions are practical. The Outbox pattern solves it: write the event to an `outbox` table in the same database transaction as the business entity. A separate process (CDC via Debezium, or a polling publisher) reads from the outbox table and publishes to Kafka, deleting processed rows. Now the DB transaction is the source of truth — if the DB transaction commits, the event will eventually be published. If it rolls back, no event is written.
+
+---
+
+**Q4: How does CQRS improve system performance and what are its costs?**
+
+> CQRS improves performance by allowing the read model to be optimized independently of the write model. Write side: normalized, ACID-consistent, optimized for transactional integrity. Read side: denormalized, pre-computed, stored in a technology optimized for querying (Elasticsearch for full-text search, Redis for low-latency lookups, MongoDB for flexible document queries). A complex dashboard query that would require 8 JOIN operations on the write model becomes a single document fetch on the read model. The costs are real: eventual consistency between write and read models (UI must handle this), significantly more code (two models, projection handlers, two databases), operational complexity of keeping read models synchronized, and debugging complexity when read models drift from write models.
+
+---
+
+**Q5: Explain the Saga pattern and when to choose choreography vs orchestration.**
+
+> Sagas manage long-running distributed transactions without distributed locking, using sequences of local transactions with compensating transactions for rollback. Choreography: each service publishes events and reacts to others' events. No central coordinator. Works well for simple, stable flows with few steps — but complex flows become impossible to reason about (implicit choreography = implicit bugs). Orchestration: a central saga orchestrator explicitly commands each step and handles failures. The flow is visible in code, easier to monitor and debug. Use orchestration for complex flows (>3 steps), flows requiring explicit timeout handling, or when you need clear visibility into saga state. Use choreography for simple flows where loose coupling and no single point of failure matter more than visibility.
+
+---
+
+**Q6: What is the difference between Reactive programming and asynchronous programming?**
+
+> Async programming (CompletableFuture, @Async) means operations don't block the calling thread. Reactive programming is a superset: it's async + back-pressure. Back-pressure is the key differentiator — it means the consumer can signal to the producer "slow down, I can't keep up," preventing unbounded queue growth and OOM. In Project Reactor, `Flux` and `Mono` are back-pressure-aware publishers. A `Flux` of database results won't overwhelm the consumer — the consumer controls the rate. Additionally, reactive frameworks (WebFlux) use an event loop model (few threads, many concurrent requests) vs thread-per-request (many threads, each blocked). The tradeoff: reactive is significantly more complex to write, debug, and reason about — only justified for I/O-bound high-concurrency scenarios.
+
+---
+
+**Q7: How do you handle eventual consistency in a CQRS system from a UX perspective?**
+
+> Eventual consistency is the price of CQRS scalability. Strategies: (1) Optimistic UI updates: immediately update the local UI state after a command succeeds, without waiting for the read model to catch up — most users never notice the lag. (2) Polling/WebSocket: after a command, poll the read endpoint until the expected change appears (works for short lags). (3) Return the created/updated resource from the command endpoint (pragmatic violation of pure CQRS — acceptable in many systems). (4) Version tracking: include an expected version in queries; if the read model version is older than the command result version, wait or return a "processing" status. (5) Design flows where consistency matters to use synchronous reads from the write model immediately after writes.
+
+---
+
+**Q8: What is the CAP Theorem and how does it apply to database selection?**
+
+> CAP states that a distributed system can provide at most two of: Consistency (every read sees the most recent write), Availability (every request gets a non-error response), and Partition Tolerance (the system continues operating despite network partitions). Since partitions are inevitable in distributed systems, the real choice is CP vs AP. PostgreSQL (CP): on partition, refuses writes to maintain consistency. Cassandra (AP): on partition, accepts writes on both sides (eventual consistency). DynamoDB: configurable per-operation (eventually consistent reads by default, strongly consistent optional). MongoDB (configurable). The practical implication: use CP databases for financial data (money must be consistent), AP databases for catalog/profile data where eventual consistency is acceptable and availability matters more.
+
+---
+
+**Q9: Explain Circuit Breaker states and what triggers each transition.**
+
+> Three states: (1) Closed (normal): calls pass through, failures tracked in a sliding window. (2) Open: all calls fail immediately (fail-fast), no calls to downstream. Transition: failure rate exceeds threshold (e.g., 50% of last 20 calls failed). (3) Half-Open: allows a configured number of test calls through. Transition from Open: after the wait duration expires. Transition from Half-Open to Closed: if test calls succeed. Transition from Half-Open to Open: if test calls fail. The key insight: circuit breaker protects the system from cascading failures. When payment service is down, every order request waiting 30s before timing out ties up a thread. With a circuit breaker, order service fails-fast in milliseconds, frees threads, and gives payment service time to recover.
+
+---
+
+**Q10: How do you design for zero-downtime deployments in a Java microservice?**
+
+> Several techniques: (1) Rolling deployment: deploy new version to one pod at a time, health checks ensure old version still serves traffic during rollout. (2) Blue-Green: two identical environments; switch traffic atomically; instant rollback. (3) Canary: route 5% of traffic to new version, monitor error rates, gradually increase. Technical requirements: backward-compatible API changes (never remove/rename fields in one deployment), database migrations must be backward-compatible (add columns with defaults, don't rename/drop until old version is gone — Expand-Contract pattern), externalize configuration, graceful shutdown (drain in-flight requests before stopping), readiness probes (don't route traffic until app is ready). The critical mistake is a database migration that breaks the old version — always decouple DB migration from code deployment.
+
+---
+
+**Q11: What patterns prevent cache stampede in high-traffic systems?**
+
+> Cache stampede occurs when a popular cache entry expires and many concurrent requests all miss the cache simultaneously, flooding the database. Solutions: (1) Lock-based loading: only one thread/process loads the value; others wait — use `ConcurrentHashMap.computeIfAbsent()` with a `CompletableFuture` value. (2) Probabilistic early expiration (XFetch algorithm): before expiry, randomly refresh based on how expensive the load is and how close to expiry. (3) Background refresh: a background thread pre-emptively refreshes before expiry, so the cache is never cold. (4) Request coalescing at the load balancer level (e.g., Varnish Grace mode). (5) Different TTLs across instances: add random jitter to TTL so entries don't expire simultaneously across 50 pods.
+
+---
+
+**Q12: How do you design a high-availability architecture for a Java service?**
+
+> HA requires eliminating single points of failure at every layer: (1) Application: multiple instances behind a load balancer, stateless design (sessions in Redis, no local state). (2) Load balancer: AWS ALB is managed HA; if self-managed, use VRRP/floating IPs. (3) Database: primary + replicas with automatic failover (RDS Multi-AZ, PostgreSQL Patroni). (4) Cache: Redis Sentinel (automatic failover) or Redis Cluster (horizontal HA). (5) Messaging: Kafka with replication factor ≥ 3, min ISR ≥ 2. (6) Deployment: across multiple availability zones — at least 2, ideally 3. (7) Circuit breakers and fallbacks for all downstream dependencies. (8) Health probes correctly configured (liveness ≠ readiness). (9) Graceful shutdown for in-flight request draining. Target: 99.9% (8.7 hours downtime/year) requires multiple nines at each layer since availability compounds multiplicatively.
+
+---
+
+**Q13: What is DDD's Anti-Corruption Layer and when do you need it?**
+
+> The ACL is a translation layer that sits between your bounded context and an external context (legacy system, third-party API, another team's service) with a different domain model. Without ACL, you'd let the external model "pollute" your domain — your `Order` would have fields like `legacyOrderCode` and `sapCustomerNumber`. With ACL, you translate at the boundary: external `SAPCustomer` → your `Customer` (only the fields you care about, in your ubiquitous language). Need ACL when: consuming a legacy system with a fundamentally different model; integrating with a third-party API that doesn't align with your domain; consuming an upstream bounded context that changes frequently (ACL shields your domain from their changes); or when the external model would pollute your clean domain language.
+
+---
+
+**Q14: Explain Event Sourcing and when it's worth the complexity.**
+
+> Event Sourcing stores the sequence of events that caused the current state, not the current state itself. Instead of `UPDATE orders SET status='CONFIRMED'`, you append `OrderConfirmed{orderId, timestamp, confirmedBy}` to an event log. Current state is derived by replaying events. Benefits: complete audit trail (required for financial/healthcare systems); temporal queries ("what was the order state last Tuesday?"); replay events against new projections (add a new read model by replaying history); natural fit with CQRS and event-driven architecture. Costs: significant complexity — event schema evolution is hard (immutable history), eventual consistency is mandatory, querying current state requires projection, tooling (Axon, EventStoreDB) has learning curve. Worth it for: financial transactions, healthcare records, anywhere audit history is legally required, or when the event history itself has business value.
+
+---
+
+**Q15: How do you handle schema evolution in an event-driven architecture?**
+
+> Events are immutable once published — you can't change published events. Strategies: (1) Additive changes only in v1: add optional fields with defaults. Consumers using schema registry (Avro + Confluent Schema Registry) with forward/backward compatibility checks will accept new fields. (2) Upcasting: when replaying old events, transform them to the new schema in-code — v1 event → v2 event format. Axon Framework has built-in upcasting support. (3) Multiple event versions: publish `OrderPlacedV2` alongside `OrderPlacedV1` during migration period; consumers migrate at their own pace; deprecate v1 after all consumers upgraded. (4) Consumer-first migration: upgrade consumers to handle both old and new format BEFORE upgrading producers. Never remove/rename fields in a published event schema — this is a breaking change that can silently corrupt consumers.
+
+---
+
+## 5. Advanced / Senior-Level Considerations
+
+### Architecture Decision Records (ADRs)
+Senior engineers document architecture decisions. Every significant choice (why Kafka over RabbitMQ, why CQRS for this module) deserves an ADR:
+```markdown
+# ADR-003: Use Outbox Pattern for Event Publishing
+
+## Status: Accepted
+
+## Context
+Order Service must publish events to Kafka reliably. Direct dual-write 
+risks message loss on crash between DB commit and Kafka publish.
+
+## Decision
+Use Transactional Outbox pattern with Debezium CDC.
+
+## Consequences
++ Guaranteed at-least-once delivery
++ No performance overhead on write path
+- Requires Debezium operational overhead
+- Events delayed by CDC lag (~100ms typical)
+- Outbox table requires cleanup job
+```
+
+### Strangler Fig Pattern — Monolith to Microservices Migration
+```
+Phase 1: Route traffic through Facade (no code change yet)
+Client ──► Facade ──► Monolith (100%)
+
+Phase 2: Implement Order Service, route orders there
+Client ──► Facade ──► Order Service (orders)
+                  └──► Monolith (everything else)
+
+Phase 3: Gradually move more capabilities
+Client ──► API Gateway ──► Order Service
+                       ──► Payment Service
+                       ──► Monolith (remaining)
+
+Phase 4: Monolith is empty — decommission
+```
+
+### Saga Failure Modes Senior Engineers Must Handle
+- **Lost update**: two sagas modify the same aggregate — use semantic locking (aggregate state machine that rejects conflicting sagas)
+- **Dirty reads**: saga A reads aggregate state modified by saga B that later rolls back — use countermeasures (pessimistic view, reread value before committing)
+- **Non-repeatable reads**: saga reads aggregate twice, gets different values — design sagas to read once and store locally
+
+### Service Mesh vs Application-Level Resilience
+- Service mesh (Istio/Linkerd): handles retries, circuit breaking, mTLS, observability at the infrastructure level — language agnostic
+- Application-level (Resilience4j): business-aware fallbacks, retry with business logic, custom circuit breaker conditions
+- Senior recommendation: use both — service mesh for infrastructure concerns, application-level for business-aware resilience
+
+---
+
+## 6. Summary / Cheat Sheet
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    JAVA ARCHITECTURE CHEAT SHEET                        │
+├──────────────────────┬──────────────────────────────────────────────────┤
+│ STRUCTURE            │                                                  │
+│ Monolith             │ Default start. Use modular monolith with Java    │
+│                      │ modules to enforce boundaries.                   │
+│ Layered              │ Simple, well-understood. Risk: anemic model.     │
+│ Hexagonal            │ Domain isolated from framework/infra. Test easily│
+│ Clean                │ Hexagonal + explicit layers + Dependency Rule    │
+├──────────────────────┼──────────────────────────────────────────────────┤
+│ DECOMPOSITION        │                                                  │
+│ Microservices        │ Only when domain known + team structure aligned  │
+│ DDD Bounded Context  │ Decomposition boundary = ubiquitous language     │
+│ Strangler Fig        │ Safe migration from monolith                     │
+├──────────────────────┼──────────────────────────────────────────────────┤
+│ COMMUNICATION        │                                                  │
+│ Sync                 │ REST/gRPC — real-time, simple flows              │
+│ Async                │ Kafka/RabbitMQ — decoupled, resilient            │
+│ Outbox Pattern       │ Guaranteed at-least-once event delivery          │
+│ Saga (choreography)  │ Simple flows, loose coupling                     │
+│ Saga (orchestration) │ Complex flows, explicit visibility               │
+├──────────────────────┼──────────────────────────────────────────────────┤
+│ SCALABILITY          │                                                  │
+│ Stateless            │ Sessions in Redis, no local state                │
+│ CQRS                 │ Separate read/write models + stores              │
+│ Read replicas        │ Route @Transactional(readOnly=true) to replica   │
+│ Caching              │ Cache-aside + TTL + event-driven eviction        │
+├──────────────────────┼──────────────────────────────────────────────────┤
+│ RESILIENCE           │                                                  │
+│ Circuit Breaker      │ Resilience4j — fail fast, protect downstream     │
+│ Retry + backoff      │ Exponential + jitter — prevent retry storms      │
+│ Bulkhead             │ Isolate resource pools per dependency            │
+│ Timeout              │ Every remote call MUST have a timeout            │
+├──────────────────────┼──────────────────────────────────────────────────┤
+│ CONSISTENCY          │                                                  │
+│ Within service       │ ACID transactions (JPA/@Transactional)           │
+│ Across services      │ Saga + eventual consistency                      │
+│ Never                │ Distributed 2PC in microservices                 │
+│ Idempotency          │ All commands/events must be safe to retry        │
+├──────────────────────┼──────────────────────────────────────────────────┤
+│ CLOUD-NATIVE         │                                                  │
+│ 12-Factor            │ Stateless, config via env, log to stdout         │
+│ Container tuning     │ -XX:+UseContainerSupport, MaxRAMPercentage=75    │
+│ Cold starts          │ GraalVM native (Quarkus) or SnapStart            │
+│ Health probes        │ Liveness ≠ dependency health                     │
+└──────────────────────┴──────────────────────────────────────────────────┘
+
+KEY DECISION HEURISTICS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Monolith first → split when you have PROVEN pain
+  Domain model first → let architecture emerge from domain
+  Async by default → sync only when real-time response required
+  Idempotent by default → the network WILL deliver duplicates
+  Eventual consistency by default → strong consistency costs availability
+  Test domain in isolation → if you can't, your architecture is wrong
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+
+# Java Design Patterns — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+Design patterns are **reusable solutions to commonly occurring problems** in software design. They are not finished code but templates/blueprints. Introduced formally by the "Gang of Four" (GoF) in *Design Patterns: Elements of Reusable Object-Oriented Software* (1994).
+
+**Why they matter:**
+- Provide a shared vocabulary among developers
+- Reduce coupling, increase cohesion
+- Enable maintainability, testability, and scalability
+- Fundamental to frameworks like Spring, Hibernate, and Java EE
+
+**Real-world applications:**
+- `java.util.Calendar.getInstance()` → Factory
+- `java.lang.Runtime.getRuntime()` → Singleton
+- `java.io.InputStream` wrappers → Decorator
+- Spring's `ApplicationContext` → Factory + Singleton
+- Spring AOP → Proxy
+- `javax.swing` event listeners → Observer
+
+---
+
+## Core Concepts
+
+- **Encapsulate what varies** — isolate the parts that change
+- **Program to interfaces, not implementations**
+- **Favor composition over inheritance**
+- **Depend on abstractions, not concretions** (DIP)
+- Patterns fall into 3 categories: **Creational**, **Structural**, **Behavioral**
+
+---
+
+## 1. CREATIONAL PATTERNS
+
+> *Concerned with object creation mechanisms.*
+
+---
+
+### 1.1 Singleton
+
+**Definition:** Ensures a class has only **one instance** and provides a global access point.
+
+**Use cases:** Configuration manager, thread pools, logging, cache, connection pools.
+
+#### Key Details & Trade-offs:
+- Must handle **thread safety**
+- Lazy vs. Eager initialization
+- Breaks with reflection, serialization, cloning — must guard against all three
+- Hard to unit test (global state) — use dependency injection to inject the singleton instead of accessing it statically
+- Anti-pattern in many modern architectures (prefer DI containers)
+
+#### Implementations:
+
+**❌ Naive (not thread-safe):**
+```java
+public class Singleton {
+    private static Singleton instance;
+    private Singleton() {}
+    public static Singleton getInstance() {
+        if (instance == null) {
+            instance = new Singleton(); // race condition here
+        }
+        return instance;
+    }
+}
+```
+
+**✅ Double-Checked Locking (thread-safe, lazy):**
+```java
+public class Singleton {
+    private static volatile Singleton instance; // volatile is critical
+    private Singleton() {}
+
+    public static Singleton getInstance() {
+        if (instance == null) {                    // first check (no lock)
+            synchronized (Singleton.class) {
+                if (instance == null) {            // second check (with lock)
+                    instance = new Singleton();
+                }
+            }
+        }
+        return instance;
+    }
+}
+// volatile prevents instruction reordering during object construction
+```
+
+**✅ Bill Pugh (best practice — lazy, thread-safe, no sync overhead):**
+```java
+public class Singleton {
+    private Singleton() {}
+
+    private static class SingletonHolder {
+        private static final Singleton INSTANCE = new Singleton();
+    }
+
+    public static Singleton getInstance() {
+        return SingletonHolder.INSTANCE;
+        // JVM class loading guarantees thread safety
+    }
+}
+```
+
+**✅ Enum Singleton (serialization-safe):**
+```java
+public enum Singleton {
+    INSTANCE;
+    public void doSomething() { ... }
+}
+// Enum prevents multiple instantiation even with reflection/serialization
+```
+
+**Guard against serialization break:**
+```java
+protected Object readResolve() {
+    return getInstance(); // return the existing instance
+}
+```
+
+#### Common Pitfalls:
+- Forgetting `volatile` in DCL → broken on multi-core due to instruction reordering
+- Not handling reflection attacks (`throw exception in constructor if instance exists`)
+- Overusing Singleton — creates hidden global state
+
+---
+
+### 1.2 Factory Pattern
+
+**Two variants:** Factory Method and Abstract Factory.
+
+#### Factory Method
+**Definition:** Defines an interface for creating an object, but lets **subclasses decide** which class to instantiate.
+
+```java
+// Product
+public interface Notification {
+    void send(String message);
+}
+
+// Concrete Products
+public class EmailNotification implements Notification {
+    public void send(String message) { System.out.println("Email: " + message); }
+}
+public class SMSNotification implements Notification {
+    public void send(String message) { System.out.println("SMS: " + message); }
+}
+
+// Creator (Factory Method)
+public abstract class NotificationFactory {
+    public abstract Notification createNotification(); // factory method
+
+    public void notify(String message) {
+        Notification n = createNotification();
+        n.send(message);
+    }
+}
+
+// Concrete Creators
+public class EmailFactory extends NotificationFactory {
+    public Notification createNotification() { return new EmailNotification(); }
+}
+public class SMSFactory extends NotificationFactory {
+    public Notification createNotification() { return new SMSNotification(); }
+}
+```
+
+#### Abstract Factory
+**Definition:** Creates **families of related objects** without specifying concrete classes.
+
+```java
+// Abstract Factory
+public interface UIFactory {
+    Button createButton();
+    Checkbox createCheckbox();
+}
+
+// Concrete Factories
+public class WindowsUIFactory implements UIFactory {
+    public Button createButton() { return new WindowsButton(); }
+    public Checkbox createCheckbox() { return new WindowsCheckbox(); }
+}
+public class MacUIFactory implements UIFactory {
+    public Button createButton() { return new MacButton(); }
+    public Checkbox createCheckbox() { return new MacCheckbox(); }
+}
+```
+
+**Key Detail:** Factory Method uses inheritance; Abstract Factory uses composition.
+
+#### Common Pitfalls:
+- Bloated factory classes when product types grow — consider registry pattern
+- Confusing Factory Method (single product) with Abstract Factory (product families)
+
+---
+
+### 1.3 Builder
+
+**Definition:** Constructs complex objects **step by step**. Separates construction from representation.
+
+**Use cases:** Building SQL queries, HTTP requests, complex configuration objects, test data builders.
+
+```java
+public class Pizza {
+    private final String size;        // required
+    private final String crust;       // required
+    private final boolean cheese;     // optional
+    private final boolean pepperoni;  // optional
+    private final boolean mushrooms;  // optional
+
+    private Pizza(Builder builder) {
+        this.size = builder.size;
+        this.crust = builder.crust;
+        this.cheese = builder.cheese;
+        this.pepperoni = builder.pepperoni;
+        this.mushrooms = builder.mushrooms;
+    }
+
+    public static class Builder {
+        private final String size;
+        private final String crust;
+        private boolean cheese;
+        private boolean pepperoni;
+        private boolean mushrooms;
+
+        public Builder(String size, String crust) { // required params in constructor
+            this.size = size;
+            this.crust = crust;
+        }
+
+        public Builder cheese(boolean val) { cheese = val; return this; }
+        public Builder pepperoni(boolean val) { pepperoni = val; return this; }
+        public Builder mushrooms(boolean val) { mushrooms = val; return this; }
+
+        public Pizza build() {
+            // validation before construction
+            if (size == null || size.isBlank()) throw new IllegalStateException("Size required");
+            return new Pizza(this);
+        }
+    }
+}
+
+// Usage
+Pizza pizza = new Pizza.Builder("Large", "Thin")
+    .cheese(true)
+    .pepperoni(true)
+    .build();
+```
+
+**Key Details:**
+- Makes the object **immutable** if all fields set via builder
+- Telescoping constructor problem solved cleanly
+- Lombok's `@Builder` generates this automatically
+
+#### Common Pitfalls:
+- Forgetting validation in `build()` method
+- Mutable builder fields leaking state between builds — reset builder after build if reusing
+
+---
+
+### 1.4 Prototype
+
+**Definition:** Creates new objects by **cloning** an existing object (the prototype).
+
+**Use cases:** When object creation is expensive (DB queries, complex initialization); game object copying.
+
+```java
+public abstract class Shape implements Cloneable {
+    private String color;
+    public abstract void draw();
+
+    @Override
+    public Shape clone() {
+        try {
+            return (Shape) super.clone(); // shallow copy
+        } catch (CloneNotSupportedException e) {
+            throw new AssertionError();
+        }
+    }
+}
+
+public class Circle extends Shape {
+    private int radius;
+    public Circle(int radius, String color) {
+        this.radius = radius;
+        this.color = color; // inherited
+    }
+    public void draw() { System.out.println("Drawing Circle r=" + radius); }
+}
+
+// Deep copy example (when fields are mutable objects)
+public class DeepCopyExample implements Cloneable {
+    private List<String> items;
+
+    @Override
+    public DeepCopyExample clone() {
+        try {
+            DeepCopyExample copy = (DeepCopyExample) super.clone();
+            copy.items = new ArrayList<>(this.items); // deep copy the list
+            return copy;
+        } catch (CloneNotSupportedException e) {
+            throw new AssertionError();
+        }
+    }
+}
+```
+
+**Key Details:**
+- `super.clone()` is a **shallow copy** — mutable nested objects are shared
+- Prefer copy constructors or static factory `copy(T original)` over `Cloneable` (Joshua Bloch recommendation)
+- Serialization-based deep copy as alternative (slow but simple)
+
+#### Common Pitfalls:
+- Shallow copy when deep copy is needed — shared mutable state causes bugs
+- `Cloneable` is a broken API in Java — consider copy constructors instead
+
+---
+
+## 2. STRUCTURAL PATTERNS
+
+> *Concerned with how classes and objects are composed to form larger structures.*
+
+---
+
+### 2.1 Adapter
+
+**Definition:** Converts the interface of a class into another interface that clients expect. **Bridges incompatible interfaces.**
+
+**Use cases:** Integrating third-party libraries, legacy system integration, XML→JSON adapters.
+
+```java
+// Target interface (what client expects)
+public interface MediaPlayer {
+    void play(String fileName);
+}
+
+// Adaptee (incompatible interface)
+public class VLCPlayer {
+    public void playVLC(String fileName) {
+        System.out.println("Playing VLC: " + fileName);
+    }
+}
+
+// Adapter
+public class MediaAdapter implements MediaPlayer {
+    private VLCPlayer vlcPlayer;
+
+    public MediaAdapter(VLCPlayer vlcPlayer) {
+        this.vlcPlayer = vlcPlayer;
+    }
+
+    @Override
+    public void play(String fileName) {
+        vlcPlayer.playVLC(fileName); // translates the call
+    }
+}
+
+// Client
+MediaPlayer player = new MediaAdapter(new VLCPlayer());
+player.play("movie.vlc");
+```
+
+**Object Adapter vs Class Adapter:**
+- Object Adapter (above): uses composition — preferred in Java (no multiple inheritance)
+- Class Adapter: uses multiple inheritance — not possible in Java, use with interfaces
+
+---
+
+### 2.2 Decorator
+
+**Definition:** Attaches **additional responsibilities** to an object dynamically. Provides a flexible alternative to subclassing.
+
+**Use cases:** `java.io` streams, HTTP request/response filters, logging, caching wrappers, Spring's `@Transactional`.
+
+```java
+// Component interface
+public interface Coffee {
+    String getDescription();
+    double getCost();
+}
+
+// Concrete Component
+public class SimpleCoffee implements Coffee {
+    public String getDescription() { return "Simple Coffee"; }
+    public double getCost() { return 1.0; }
+}
+
+// Base Decorator
+public abstract class CoffeeDecorator implements Coffee {
+    protected Coffee decoratedCoffee;
+    public CoffeeDecorator(Coffee coffee) { this.decoratedCoffee = coffee; }
+    public String getDescription() { return decoratedCoffee.getDescription(); }
+    public double getCost() { return decoratedCoffee.getCost(); }
+}
+
+// Concrete Decorators
+public class MilkDecorator extends CoffeeDecorator {
+    public MilkDecorator(Coffee coffee) { super(coffee); }
+    public String getDescription() { return super.getDescription() + ", Milk"; }
+    public double getCost() { return super.getCost() + 0.25; }
+}
+
+public class SugarDecorator extends CoffeeDecorator {
+    public SugarDecorator(Coffee coffee) { super(coffee); }
+    public String getDescription() { return super.getDescription() + ", Sugar"; }
+    public double getCost() { return super.getCost() + 0.10; }
+}
+
+// Usage — layered decoration
+Coffee coffee = new SimpleCoffee();
+coffee = new MilkDecorator(coffee);
+coffee = new SugarDecorator(coffee);
+coffee = new MilkDecorator(coffee); // double milk
+System.out.println(coffee.getDescription() + " $" + coffee.getCost());
+// Output: Simple Coffee, Milk, Sugar, Milk $1.60
+```
+
+#### Common Pitfalls:
+- Too many small classes — becomes hard to debug
+- Order of decoration matters — wrap carefully
+- Not the same as inheritance: dynamic, stackable, at runtime
+
+---
+
+### 2.3 Proxy
+
+**Definition:** Provides a **surrogate or placeholder** for another object to control access.
+
+**Three types:**
+- **Virtual Proxy**: lazy initialization (expensive objects)
+- **Protection Proxy**: access control
+- **Remote Proxy**: represents object in different address space (RMI, gRPC)
+- **Caching Proxy**: caches results
+
+```java
+// Subject interface
+public interface Image {
+    void display();
+}
+
+// Real Subject (expensive to create)
+public class RealImage implements Image {
+    private String filename;
+    public RealImage(String filename) {
+        this.filename = filename;
+        loadFromDisk(); // expensive operation
+    }
+    private void loadFromDisk() {
+        System.out.println("Loading " + filename);
+    }
+    public void display() { System.out.println("Displaying " + filename); }
+}
+
+// Virtual Proxy — defers creation until needed
+public class ImageProxy implements Image {
+    private RealImage realImage;
+    private String filename;
+
+    public ImageProxy(String filename) { this.filename = filename; } // no loading yet
+
+    public void display() {
+        if (realImage == null) {
+            realImage = new RealImage(filename); // lazy init
+        }
+        realImage.display();
+    }
+}
+```
+
+**Java Dynamic Proxy (reflection-based):**
+```java
+// Used heavily in Spring AOP, JDK proxies for interfaces
+Image proxy = (Image) Proxy.newProxyInstance(
+    Image.class.getClassLoader(),
+    new Class[]{Image.class},
+    (proxyObj, method, args) -> {
+        System.out.println("Before: " + method.getName());
+        Object result = method.invoke(new RealImage("photo.jpg"), args);
+        System.out.println("After: " + method.getName());
+        return result;
+    }
+);
+// Spring uses CGLIB for class proxies when no interface present
+```
+
+---
+
+### 2.4 Composite
+
+**Definition:** Composes objects into **tree structures** to represent part-whole hierarchies. Clients treat individual objects and compositions uniformly.
+
+**Use cases:** File system (files and folders), UI component trees, org charts, menu systems.
+
+```java
+// Component
+public interface FileSystemItem {
+    void display(String indent);
+    long getSize();
+}
+
+// Leaf
+public class File implements FileSystemItem {
+    private String name;
+    private long size;
+    public File(String name, long size) { this.name = name; this.size = size; }
+    public void display(String indent) { System.out.println(indent + name + " (" + size + "bytes)"); }
+    public long getSize() { return size; }
+}
+
+// Composite
+public class Directory implements FileSystemItem {
+    private String name;
+    private List<FileSystemItem> children = new ArrayList<>();
+
+    public Directory(String name) { this.name = name; }
+
+    public void add(FileSystemItem item) { children.add(item); }
+    public void remove(FileSystemItem item) { children.remove(item); }
+
+    public void display(String indent) {
+        System.out.println(indent + "[" + name + "]");
+        for (FileSystemItem item : children) {
+            item.display(indent + "  "); // recursive
+        }
+    }
+
+    public long getSize() {
+        return children.stream().mapToLong(FileSystemItem::getSize).sum(); // recursive sum
+    }
+}
+
+// Usage
+Directory root = new Directory("root");
+root.add(new File("readme.txt", 100));
+Directory src = new Directory("src");
+src.add(new File("Main.java", 500));
+src.add(new File("App.java", 300));
+root.add(src);
+root.display("");
+```
+
+---
+
+## 3. BEHAVIORAL PATTERNS
+
+> *Concerned with communication and responsibility between objects.*
+
+---
+
+### 3.1 Observer
+
+**Definition:** Defines a **one-to-many dependency** so when one object changes state, all dependents are notified automatically.
+
+**Use cases:** Event systems, MVC (model notifies views), message queues, reactive streams.
+
+```java
+// Observer interface
+public interface Observer {
+    void update(String event, Object data);
+}
+
+// Subject interface
+public interface Subject {
+    void subscribe(String event, Observer observer);
+    void unsubscribe(String event, Observer observer);
+    void notifyObservers(String event, Object data);
+}
+
+// Concrete Subject
+public class EventBus implements Subject {
+    private Map<String, List<Observer>> listeners = new HashMap<>();
+
+    public void subscribe(String event, Observer observer) {
+        listeners.computeIfAbsent(event, k -> new CopyOnWriteArrayList<>()).add(observer);
+        // CopyOnWriteArrayList for thread safety during iteration
+    }
+
+    public void unsubscribe(String event, Observer observer) {
+        List<Observer> obs = listeners.get(event);
+        if (obs != null) obs.remove(observer);
+    }
+
+    public void notifyObservers(String event, Object data) {
+        List<Observer> obs = listeners.getOrDefault(event, Collections.emptyList());
+        for (Observer o : obs) {
+            o.update(event, data); // consider try-catch to isolate failures
+        }
+    }
+}
+
+// Usage
+EventBus bus = new EventBus();
+bus.subscribe("ORDER_PLACED", (event, data) -> System.out.println("Email sent for: " + data));
+bus.subscribe("ORDER_PLACED", (event, data) -> System.out.println("Inventory updated for: " + data));
+bus.notifyObservers("ORDER_PLACED", "Order#123");
+```
+
+**Key Details:**
+- Push vs Pull model — push sends data in notification, pull has observer request data
+- Memory leaks: failing to `unsubscribe` keeps observer in memory (especially in long-lived subjects)
+- Java's built-in `java.util.Observable` is deprecated — use PropertyChangeSupport or custom impl
+- Reactive: RxJava/Project Reactor are advanced Observer implementations
+
+---
+
+### 3.2 Strategy
+
+**Definition:** Defines a family of algorithms, encapsulates each one, and makes them **interchangeable at runtime**.
+
+**Use cases:** Sorting algorithms, payment methods, compression strategies, routing algorithms.
+
+```java
+// Strategy interface
+public interface SortStrategy {
+    void sort(int[] array);
+}
+
+// Concrete Strategies
+public class BubbleSort implements SortStrategy {
+    public void sort(int[] array) { /* bubble sort impl */ }
+}
+public class QuickSort implements SortStrategy {
+    public void sort(int[] array) { /* quick sort impl */ }
+}
+public class MergeSort implements SortStrategy {
+    public void sort(int[] array) { /* merge sort impl */ }
+}
+
+// Context
+public class Sorter {
+    private SortStrategy strategy;
+
+    public Sorter(SortStrategy strategy) { this.strategy = strategy; }
+
+    public void setStrategy(SortStrategy strategy) { // runtime swap
+        this.strategy = strategy;
+    }
+
+    public void sort(int[] array) {
+        strategy.sort(array); // delegate to strategy
+    }
+}
+
+// Usage with lambdas (Java 8+) — strategy as functional interface
+Sorter sorter = new Sorter(array -> Arrays.sort(array)); // built-in sort
+sorter.sort(new int[]{5, 3, 1, 4, 2});
+
+// Runtime strategy change based on data size
+sorter.setStrategy(array.length < 100 ? new BubbleSort() : new QuickSort());
+```
+
+**Strategy vs Template Method:**
+- Strategy: changes the **whole** algorithm via composition
+- Template Method: changes **parts** of algorithm via inheritance
+
+---
+
+### 3.3 Command
+
+**Definition:** Encapsulates a **request as an object**, allowing parameterization, queuing, logging, and undoable operations.
+
+**Use cases:** Undo/redo (text editors), transaction management, task queues, macro recording.
+
+```java
+// Command interface
+public interface Command {
+    void execute();
+    void undo();
+}
+
+// Receiver
+public class TextEditor {
+    private StringBuilder text = new StringBuilder();
+    public void insertText(String str, int pos) { text.insert(pos, str); }
+    public void deleteText(int start, int end) { text.delete(start, end); }
+    public String getText() { return text.toString(); }
+}
+
+// Concrete Command
+public class InsertCommand implements Command {
+    private TextEditor editor;
+    private String text;
+    private int position;
+
+    public InsertCommand(TextEditor editor, String text, int position) {
+        this.editor = editor; this.text = text; this.position = position;
+    }
+
+    public void execute() { editor.insertText(text, position); }
+    public void undo() { editor.deleteText(position, position + text.length()); }
+}
+
+// Invoker with undo stack
+public class CommandManager {
+    private Deque<Command> history = new ArrayDeque<>();
+    private Deque<Command> redoStack = new ArrayDeque<>();
+
+    public void execute(Command command) {
+        command.execute();
+        history.push(command);
+        redoStack.clear(); // clear redo on new action
+    }
+
+    public void undo() {
+        if (!history.isEmpty()) {
+            Command cmd = history.pop();
+            cmd.undo();
+            redoStack.push(cmd);
+        }
+    }
+
+    public void redo() {
+        if (!redoStack.isEmpty()) {
+            Command cmd = redoStack.pop();
+            cmd.execute();
+            history.push(cmd);
+        }
+    }
+}
+```
+
+---
+
+### 3.4 Chain of Responsibility
+
+**Definition:** Passes a request along a **chain of handlers** until one handles it. Decouples sender from receiver.
+
+**Use cases:** HTTP filter chains (Servlet filters, Spring interceptors), logging levels, auth middleware, exception handling.
+
+```java
+public abstract class AuthHandler {
+    protected AuthHandler next;
+
+    public AuthHandler setNext(AuthHandler next) {
+        this.next = next;
+        return next; // enables chaining: h1.setNext(h2).setNext(h3)
+    }
+
+    public abstract boolean handle(Request request);
+
+    protected boolean passToNext(Request request) {
+        if (next != null) return next.handle(request);
+        return false; // end of chain — not handled
+    }
+}
+
+public class RateLimitHandler extends AuthHandler {
+    public boolean handle(Request request) {
+        if (isRateLimited(request)) {
+            System.out.println("Rate limited: " + request.getIp());
+            return false;
+        }
+        return passToNext(request);
+    }
+    private boolean isRateLimited(Request r) { return r.getRequestCount() > 100; }
+}
+
+public class AuthenticationHandler extends AuthHandler {
+    public boolean handle(Request request) {
+        if (!request.hasValidToken()) {
+            System.out.println("Unauthorized");
+            return false;
+        }
+        return passToNext(request);
+    }
+}
+
+public class AuthorizationHandler extends AuthHandler {
+    public boolean handle(Request request) {
+        if (!request.hasRole("ADMIN")) {
+            System.out.println("Forbidden");
+            return false;
+        }
+        return passToNext(request);
+    }
+}
+
+// Build chain
+AuthHandler chain = new RateLimitHandler();
+chain.setNext(new AuthenticationHandler())
+     .setNext(new AuthorizationHandler());
+
+chain.handle(request); // traverses chain
+```
+
+---
+
+### 3.5 Template Method
+
+**Definition:** Defines the **skeleton of an algorithm** in a base class, deferring some steps to subclasses.
+
+**Use cases:** Data parsers, report generators, game loops, Spring's `JdbcTemplate`.
+
+```java
+public abstract class DataMigration {
+    // Template method — final to prevent override of algorithm structure
+    public final void migrate() {
+        connect();
+        extractData();
+        transformData();  // hook — optional override
+        loadData();
+        disconnect();
+        report();
+    }
+
+    protected abstract void connect();
+    protected abstract void extractData();
+    protected abstract void loadData();
+
+    // Hook method — default implementation, subclass may override
+    protected void transformData() {
+        System.out.println("Default: no transformation");
+    }
+
+    private void disconnect() { System.out.println("Disconnecting..."); }
+    private void report() { System.out.println("Migration complete."); }
+}
+
+public class MySQLToPostgresMigration extends DataMigration {
+    protected void connect() { System.out.println("Connecting to MySQL and Postgres"); }
+    protected void extractData() { System.out.println("Extracting from MySQL"); }
+    protected void loadData() { System.out.println("Loading to Postgres"); }
+
+    @Override
+    protected void transformData() { // override hook
+        System.out.println("Converting MySQL-specific types to Postgres types");
+    }
+}
+```
+
+**Key Detail:** `final` on template method prevents subclasses from breaking the algorithm.
+
+---
+
+### 3.6 State Pattern
+
+**Definition:** Allows an object to **change its behavior when its internal state changes**. Appears as if the object changed its class.
+
+**Use cases:** Order lifecycle, vending machines, TCP connections, workflow engines.
+
+```java
+// State interface
+public interface OrderState {
+    void confirm(OrderContext context);
+    void ship(OrderContext context);
+    void deliver(OrderContext context);
+    void cancel(OrderContext context);
+}
+
+// Context
+public class OrderContext {
+    private OrderState state;
+    public OrderContext() { this.state = new PendingState(); }
+    public void setState(OrderState state) { this.state = state; }
+
+    public void confirm() { state.confirm(this); }
+    public void ship() { state.ship(this); }
+    public void deliver() { state.deliver(this); }
+    public void cancel() { state.cancel(this); }
+}
+
+// Concrete States
+public class PendingState implements OrderState {
+    public void confirm(OrderContext ctx) {
+        System.out.println("Order confirmed.");
+        ctx.setState(new ConfirmedState());
+    }
+    public void ship(OrderContext ctx) { System.out.println("Cannot ship: not confirmed."); }
+    public void deliver(OrderContext ctx) { System.out.println("Cannot deliver: not shipped."); }
+    public void cancel(OrderContext ctx) {
+        System.out.println("Order cancelled.");
+        ctx.setState(new CancelledState());
+    }
+}
+
+public class ConfirmedState implements OrderState {
+    public void confirm(OrderContext ctx) { System.out.println("Already confirmed."); }
+    public void ship(OrderContext ctx) {
+        System.out.println("Order shipped.");
+        ctx.setState(new ShippedState());
+    }
+    public void deliver(OrderContext ctx) { System.out.println("Not shipped yet."); }
+    public void cancel(OrderContext ctx) {
+        System.out.println("Order cancelled from confirmed.");
+        ctx.setState(new CancelledState());
+    }
+}
+// ... ShippedState, DeliveredState, CancelledState follow same pattern
+```
+
+**State vs Strategy:**
+- Strategy: algorithm is **chosen externally**, doesn't know about other strategies
+- State: states **know about each other** and drive transitions internally
+
+---
+
+## 4. ARCHITECTURAL PATTERNS
+
+---
+
+### 4.1 Dependency Injection (DI)
+
+**Definition:** A technique where an object's **dependencies are provided from outside** rather than created internally. Implements Inversion of Control (IoC).
+
+**Three forms:**
+```java
+// 1. Constructor Injection (preferred)
+public class OrderService {
+    private final PaymentService paymentService; // final = immutable
+    private final NotificationService notificationService;
+
+    public OrderService(PaymentService paymentService,
+                        NotificationService notificationService) {
+        this.paymentService = paymentService;
+        this.notificationService = notificationService;
+    }
+}
+
+// 2. Setter Injection (optional dependencies)
+public class OrderService {
+    private AuditService auditService;
+
+    @Autowired
+    public void setAuditService(AuditService auditService) {
+        this.auditService = auditService;
+    }
+}
+
+// 3. Field Injection (avoid in production — hard to test)
+public class OrderService {
+    @Autowired
+    private PaymentService paymentService; // not final, harder to mock
+}
+```
+
+**Without DI (tightly coupled):**
+```java
+public class OrderService {
+    private PaymentService paymentService = new StripePaymentService(); // hardcoded
+    // Can't swap to PayPal, can't unit test without real Stripe
+}
+```
+
+**With DI (loosely coupled):**
+```java
+// In tests
+OrderService service = new OrderService(new MockPaymentService(), new MockNotificationService());
+
+// In Spring
+@Configuration
+public class AppConfig {
+    @Bean
+    public PaymentService paymentService() { return new StripePaymentService(); }
+    @Bean
+    public OrderService orderService() { return new OrderService(paymentService(), ...); }
+}
+```
+
+**Why constructor injection is preferred:**
+- Dependencies are **explicit and required**
+- Object is always in valid state after construction
+- `final` fields possible → immutability
+- Works without DI container (testability)
+- Spring 4.3+: single constructor auto-wired without `@Autowired`
+
+---
+
+### 4.2 MVC Pattern
+
+**Definition:** Separates application into **Model** (data/logic), **View** (presentation), **Controller** (input handling).
+
+```
+User → Controller → Model → View → User
+                  ↑_______|
+                  (Model notifies View via Observer or View polls Model)
+```
+
+```java
+// Model
+public class UserModel {
+    private String name;
+    private String email;
+    // getters, setters, validation, business logic
+    public boolean isValidEmail() { return email.contains("@"); }
+}
+
+// View
+public class UserView {
+    public void displayUser(String name, String email) {
+        System.out.println("Name: " + name + ", Email: " + email);
+    }
+    public void displayError(String message) {
+        System.out.println("Error: " + message);
+    }
+}
+
+// Controller
+public class UserController {
+    private UserModel model;
+    private UserView view;
+
+    public UserController(UserModel model, UserView view) {
+        this.model = model;
+        this.view = view;
+    }
+
+    public void updateUserEmail(String email) {
+        model.setEmail(email);
+        if (model.isValidEmail()) {
+            view.displayUser(model.getName(), model.getEmail());
+        } else {
+            view.displayError("Invalid email");
+        }
+    }
+}
+```
+
+**In Spring MVC:**
+```java
+@Controller
+public class UserController {
+    @Autowired
+    private UserService userService; // Model layer
+
+    @GetMapping("/users/{id}")
+    public String getUser(@PathVariable Long id, Model model) {
+        User user = userService.findById(id); // Service/Model layer
+        model.addAttribute("user", user);     // pass to View
+        return "user-detail";                  // View name (Thymeleaf template)
+    }
+}
+```
+
+**MVC variants:**
+- **MVP (Model-View-Presenter)**: Presenter handles all UI logic, View is passive — Android
+- **MVVM (Model-View-ViewModel)**: Two-way data binding — Angular, Vue, WPF
+- **Flux/Redux**: Unidirectional data flow — React ecosystem
+
+---
+
+### 4.3 Repository Pattern
+
+**Definition:** Abstracts the **data access layer**, providing a collection-like interface for domain objects. Decouples business logic from persistence.
+
+```java
+// Domain entity
+public class Product {
+    private Long id;
+    private String name;
+    private BigDecimal price;
+    private String category;
+    // getters, setters
+}
+
+// Repository interface (domain layer)
+public interface ProductRepository {
+    Optional<Product> findById(Long id);
+    List<Product> findByCategory(String category);
+    List<Product> findAll();
+    Product save(Product product);
+    void delete(Long id);
+    // domain-specific queries:
+    List<Product> findByPriceLessThan(BigDecimal maxPrice);
+}
+
+// JPA implementation
+@Repository
+public class JpaProductRepository implements ProductRepository {
+    @PersistenceContext
+    private EntityManager em;
+
+    public Optional<Product> findById(Long id) {
+        return Optional.ofNullable(em.find(Product.class, id));
+    }
+
+    public List<Product> findByCategory(String category) {
+        return em.createQuery(
+            "SELECT p FROM Product p WHERE p.category = :cat", Product.class)
+            .setParameter("cat", category)
+            .getResultList();
+    }
+
+    public Product save(Product product) {
+        if (product.getId() == null) {
+            em.persist(product);
+            return product;
+        }
+        return em.merge(product);
+    }
+
+    public void delete(Long id) {
+        Product p = em.find(Product.class, id);
+        if (p != null) em.remove(p);
+    }
+}
+
+// In-memory implementation for testing
+public class InMemoryProductRepository implements ProductRepository {
+    private Map<Long, Product> store = new HashMap<>();
+    private AtomicLong idGen = new AtomicLong(1);
+
+    public Product save(Product product) {
+        if (product.getId() == null) product.setId(idGen.getAndIncrement());
+        store.put(product.getId(), product);
+        return product;
+    }
+    // ... other methods using the map
+}
+
+// Service layer uses repository through interface
+@Service
+public class ProductService {
+    private final ProductRepository repository; // depends on abstraction
+
+    public ProductService(ProductRepository repository) {
+        this.repository = repository;
+    }
+
+    public List<Product> getAffordableProducts(BigDecimal budget) {
+        return repository.findByPriceLessThan(budget);
+    }
+}
+```
+
+**Repository vs DAO:**
+- DAO: data access object, tied to persistence technology (SQL, JDBC)
+- Repository: domain-focused, thinks in domain objects not tables, higher level
+- Spring Data JPA blurs this distinction with `JpaRepository<T, ID>`
+
+**Unit of Work pattern** (companion to Repository):
+```java
+// Tracks all changes in a transaction
+public interface UnitOfWork {
+    void registerNew(DomainObject obj);
+    void registerDirty(DomainObject obj);
+    void registerDeleted(DomainObject obj);
+    void commit(); // persists all tracked changes
+}
+// JPA EntityManager IS a Unit of Work
+```
+
+---
+
+## 5. INTERVIEW QUESTIONS
+
+### Top 15 Questions with Expert Answers
+
+**Q1. What is the difference between Factory Method and Abstract Factory?**
+
+> Factory Method: single product, subclasses decide the concrete type — uses inheritance. Abstract Factory: creates *families* of related products — uses composition. Abstract Factory uses multiple Factory Methods internally. Use Abstract Factory when your system must be independent of how its products are created and when you need to work with multiple product families.
+
+---
+
+**Q2. Why is double-checked locking Singleton broken without `volatile`?**
+
+> Without `volatile`, the JVM/CPU can **reorder instructions** during object construction. Thread A may write the reference to `instance` before finishing constructing the object. Thread B sees a non-null `instance` and uses a partially-constructed object, causing undefined behavior. `volatile` adds a **memory barrier** preventing instruction reordering, ensuring that when Thread B reads the reference, the object is fully initialized.
+
+---
+
+**Q3. When would you use Decorator vs Inheritance?**
+
+> Use Decorator when you need to add responsibilities **dynamically at runtime**, or when subclassing would cause a **class explosion** (e.g., `MilkSugarCoffee`, `MilkCoffee`, `SugarCoffee` etc.). Decorator uses composition — you can stack multiple decorators. Inheritance is static (compile-time). Example: Java IO uses decorators — `new BufferedReader(new InputStreamReader(socket.getInputStream()))`.
+
+---
+
+**Q4. What is the difference between Proxy and Decorator?**
+
+> Both wrap an object, but intent differs. **Decorator** adds functionality to the object, and the client typically knows they're using a decorated object. **Proxy** controls *access* to the object (lazy init, security, remote, caching) — client typically thinks it's talking to the real object. Spring AOP generates proxies around beans for cross-cutting concerns (transactions, logging) — the bean class itself is unmodified.
+
+---
+
+**Q5. How does the Strategy pattern relate to the Open/Closed Principle?**
+
+> Strategy is a direct implementation of OCP. The Context class is **closed for modification** — you never change it to add new algorithms. It is **open for extension** by adding new strategy classes. New payment methods, sorting algorithms, or pricing rules can be added without touching existing code, reducing regression risk.
+
+---
+
+**Q6. What memory leak risk exists in Observer?**
+
+> If observers are added but never removed, the Subject holds strong references to all observers, preventing GC. This is particularly dangerous when observers are UI components or have short lifecycles. Mitigations: use `WeakReference<Observer>` in the subject's list, implement proper lifecycle management (unsubscribe on destroy), or use `java.lang.ref.WeakHashMap`. Also, failing to handle exceptions in one observer can prevent other observers from being notified — wrap each call in try-catch.
+
+---
+
+**Q7. When should you use Command pattern vs direct method calls?**
+
+> Use Command when you need: (1) **undo/redo** functionality, (2) **queueing/scheduling** of operations, (3) **transaction logging** (serialize commands and replay), (4) **macro recording**, (5) **remote execution**. Direct calls are simpler for straightforward operations. The overhead of encapsulating every operation as a Command is only justified when these capabilities are needed.
+
+---
+
+**Q8. What is the difference between Chain of Responsibility and Decorator?**
+
+> Decorator always passes to the next handler (wrapping behavior). Chain of Responsibility may **stop the chain** at any handler — not all handlers are guaranteed to execute. Also, in Decorator all handlers typically perform their action; in CoR, typically **only one** handler handles the request. Servlet Filter chains are actually hybrids — each filter can stop the chain or pass it to `filterChain.doFilter()`.
+
+---
+
+**Q9. Explain Builder vs Telescoping Constructor pattern.**
+
+> Telescoping constructors: `Person(String name)`, `Person(String name, int age)`, `Person(String name, int age, String email)` — becomes unreadable with many optional params. Builder solves this by making optional parameters explicit (`.email("x")`) and readable. Also solves the problem with **parameter ordering** in constructors (you can't call `new Person(null, null, "email@x.com")` clearly). Builder also enables validation before construction and creates immutable objects.
+
+---
+
+**Q10. How does DI differ from the Service Locator pattern?**
+
+> Both achieve IoC, but differently. **Service Locator**: class *asks* for its dependencies from a central registry (`ServiceLocator.get(PaymentService.class)`) — dependencies are hidden, makes testing harder, ServiceLocator must be available globally. **DI**: dependencies are *pushed in* — explicit, visible, testable without a container. Martin Fowler considers Service Locator an anti-pattern for most cases; DI is preferred. However, Service Locator is useful in plugin systems or when you don't control object creation.
+
+---
+
+**Q11. Why is constructor injection preferred over field injection in Spring?**
+
+> (1) **Immutability**: fields can be `final`. (2) **Required dependencies explicit** — NPE at startup, not at runtime. (3) **Testability** — can instantiate without Spring container. (4) **Circular dependency detection** — Spring fails fast at startup rather than at runtime. (5) **No reflection** needed. Field injection with `@Autowired` bypasses Java's visibility rules and hides the dependency relationship.
+
+---
+
+**Q12. What's the difference between Repository and DAO patterns?**
+
+> DAO (Data Access Object): low-level abstraction over a specific data source, often maps 1:1 with database tables, tied to persistence technology. Repository: higher-level abstraction, part of Domain-Driven Design, speaks the language of the domain (e.g., `findActiveCustomersInRegion()`), hides the data source completely. A Repository can use multiple DAOs internally. Repository implies a collection-like interface for aggregate roots.
+
+---
+
+**Q13. How does Template Method violate the Liskov Substitution Principle, and how do you mitigate it?**
+
+> Template Method uses inheritance, and if subclasses override hook methods in unexpected ways (return null, throw exceptions, skip logic), they can break the algorithm. Mitigation: (1) mark hook methods as `protected`, not `public`, (2) document contract for each hook, (3) use `final` on the template method, (4) validate hook return values. Consider Strategy as an alternative if behavioral variation is needed without inheritance risks.
+
+---
+
+**Q14. How would you implement a thread-safe Observer in a high-throughput system?**
+
+> Use `CopyOnWriteArrayList` for the observer list (safe iteration while modifications happen). However, for very high write throughput this is expensive due to copying. Alternative: `ConcurrentHashMap<String, Set<Observer>>` with `Collections.newSetFromMap(new ConcurrentHashMap<>())`. For distributed systems, move to a message broker (Kafka, RabbitMQ) which handles durability and scaling. For async notification in-process, use `CompletableFuture` or a dedicated thread pool to decouple notification from the subject's thread.
+
+---
+
+**Q15. When would you choose State pattern over a simple switch/if-else?**
+
+> Switch/if-else becomes a maintenance problem when: (1) number of states grows large, (2) each state has multiple behaviors, (3) state transitions need encapsulation, (4) new states are added frequently. State pattern: each state is a class, transitions are explicit, adding new states doesn't modify existing code (OCP). For simple 2-3 state machines with unlikely change, switch is fine. For complex workflows (order management, payment processing, user session lifecycle), State pattern significantly improves maintainability.
+
+---
+
+## 6. ADVANCED / SENIOR-LEVEL CONSIDERATIONS
+
+### Patterns + Concurrency
+- **Singleton** in concurrent environments: Bill Pugh holder or enum
+- **Observer**: use `CopyOnWriteArrayList`, consider async notification with `ExecutorService`
+- **Command**: command queues with `BlockingQueue<Command>` for producer-consumer
+- **Prototype**: clone must handle thread-safe deep copy of shared state
+
+### Patterns in Distributed Systems
+- **Proxy** → API Gateway pattern, circuit breaker (Resilience4j), service mesh sidecar
+- **Observer** → Event-driven architecture (Kafka, EventBridge) — distributed observer
+- **Command** → Event sourcing (commands produce events, events are stored and replayed)
+- **Repository** → CQRS: separate read repository (query model) from write repository (command model)
+- **Chain of Responsibility** → API gateway middleware, service mesh filters
+
+### Anti-patterns to Know
+- **Singleton overuse**: creates hidden global state, hard to test, violates SRP
+- **Anemic Domain Model**: all logic in Services, domain objects are just data bags — anti-MVC/DDD
+- **God Object**: one class doing everything — violates SRP, OCP
+- **Abstract Factory overengineering**: adding Abstract Factory when you'll never need multiple product families
+
+### Design Pattern Integration in Spring
+```
+Spring IoC Container = Factory + Singleton + Dependency Injection
+Spring AOP = Proxy (JDK dynamic proxy / CGLIB)
+Spring MVC = Front Controller + MVC + Template Method (DispatcherServlet)
+Spring Data = Repository + Factory (SimpleJpaRepository)
+Spring Events = Observer (ApplicationEventPublisher / @EventListener)
+RestTemplate / WebClient = Facade + Template Method
+JdbcTemplate = Template Method
+```
+
+### SOLID Principles Mapped to Patterns
+- **SRP**: Command (encapsulates one action), Repository (one concern: data access)
+- **OCP**: Strategy, Decorator, Chain of Responsibility
+- **LSP**: Template Method must be carefully designed
+- **ISP**: Abstract Factory splits product families into focused interfaces
+- **DIP**: DI, Factory Method, Repository all depend on abstractions
+
+---
+
+## 7. SUMMARY / CHEAT SHEET
+
+```
+CREATIONAL (object creation):
+├── Singleton     → one instance, thread-safe with Bill Pugh or enum
+├── Factory       → decouple creation from use; FM=subclass decides, AF=product families
+├── Builder       → complex objects step-by-step; solves telescoping constructors
+└── Prototype     → clone existing; watch shallow vs deep copy
+
+STRUCTURAL (composition):
+├── Adapter       → incompatible interfaces → wrap and translate
+├── Decorator     → add behavior dynamically; stackable; java.io
+├── Proxy         → control access; virtual/protection/remote/cache
+└── Composite     → tree of objects treated uniformly; file system
+
+BEHAVIORAL (communication):
+├── Observer      → 1-to-many notification; unsubscribe to prevent leaks
+├── Strategy      → swap algorithms at runtime; OCP compliant
+├── Command       → encapsulate request; enables undo/queue/log
+├── Chain of Resp → pass request along chain; stop or continue
+├── Template Meth → skeleton in base; hooks in subclass; mark final
+└── State         → behavior changes with state; vs Strategy: states know each other
+
+ARCHITECTURAL:
+├── DI            → push dependencies in; prefer constructor injection
+├── MVC           → Model+View+Controller; Spring MVC, variants: MVP, MVVM
+└── Repository    → domain-focused data access; decouples from persistence
+```
+
+**Quick mental model for picking a pattern:**
+- Need one instance? → **Singleton**
+- Complex object construction? → **Builder**
+- Swap algorithms? → **Strategy**
+- Add behavior without subclassing? → **Decorator**
+- Control access to object? → **Proxy**
+- Notify many on change? → **Observer**
+- Undo/queue operations? → **Command**
+- Hide data source? → **Repository**
+- Object changes behavior by state? → **State**
+- Incompatible interfaces? → **Adapter**
+- Tree of objects? → **Composite**
+- Push dependencies in? → **DI**
+
+# Java Anti-Patterns — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+Anti-patterns are **recurring solutions that seem reasonable but cause more problems than they solve**. Unlike bugs (accidental mistakes), anti-patterns are deliberate design decisions that appear correct but degrade maintainability, scalability, performance, or correctness over time.
+
+**Why senior developers must master anti-patterns:**
+- Code reviews require recognizing and articulating *why* something is wrong
+- Refactoring legacy systems demands identifying root causes
+- Architecture decisions must preempt anti-patterns at scale
+- Interview questions frequently ask "what's wrong with this code?"
+
+**Real-world consequences:**
+- God Objects → untestable monolithic classes in legacy banking systems
+- Memory leaks → OutOfMemoryError in production after days of uptime
+- Improper synchronization → data corruption in financial transactions
+- Exception swallowing → silent failures causing data loss
+- Tight coupling → inability to swap databases or messaging providers
+
+---
+
+## Core Principles Violated by Anti-Patterns
+
+- **SOLID** — SRP, OCP, LSP, ISP, DIP
+- **DRY** — Don't Repeat Yourself
+- **KISS** — Keep It Simple, Stupid
+- **YAGNI** — You Aren't Gonna Need It
+- **Fail Fast** — surface errors early and loudly
+- **Encapsulation** — hide internal state and implementation
+- **Separation of Concerns** — each unit does one thing
+
+---
+
+## 1. GOD OBJECT
+
+**Definition:** A single class that **knows too much or does too much** — accumulates responsibilities across the entire application. Violates SRP severely.
+
+**How it happens:** Starts as a reasonable service class, then every new feature gets added to the same class because "it's already there."
+
+```java
+// ❌ GOD OBJECT — 500+ line class doing everything
+public class UserManager {
+    // User CRUD
+    public User createUser(String name, String email) { ... }
+    public User findById(Long id) { ... }
+    public void deleteUser(Long id) { ... }
+
+    // Authentication
+    public String generateJwtToken(User user) { ... }
+    public boolean validateToken(String token) { ... }
+    public void refreshToken(String token) { ... }
+
+    // Email
+    public void sendWelcomeEmail(User user) { ... }
+    public void sendPasswordReset(String email) { ... }
+    public void sendPromotionalEmail(List<User> users) { ... }
+
+    // Payment
+    public void chargeUser(User user, BigDecimal amount) { ... }
+    public void refundUser(User user, String transactionId) { ... }
+    public List<Transaction> getPaymentHistory(Long userId) { ... }
+
+    // Reports
+    public byte[] generateUserReport(Long userId) { ... }
+    public List<UserStats> getDailyActiveUsers() { ... }
+
+    // Cache
+    private Map<Long, User> cache = new HashMap<>();
+    public void invalidateCache(Long userId) { ... }
+
+    // ... 400 more lines
+}
+```
+
+```java
+// ✅ REFACTORED — separated by responsibility
+public class UserRepository {
+    public User save(User user) { ... }
+    public Optional<User> findById(Long id) { ... }
+    public void delete(Long id) { ... }
+}
+
+public class AuthService {
+    public String generateToken(User user) { ... }
+    public boolean validateToken(String token) { ... }
+}
+
+public class UserNotificationService {
+    public void sendWelcome(User user) { ... }
+    public void sendPasswordReset(String email) { ... }
+}
+
+public class PaymentService {
+    public void charge(User user, BigDecimal amount) { ... }
+    public void refund(String transactionId) { ... }
+}
+
+public class UserReportService {
+    public byte[] generateReport(Long userId) { ... }
+}
+```
+
+**Detection signals:**
+- Class has more than ~200-300 lines
+- Class has more than 10 dependencies injected
+- Class name contains "Manager", "Handler", "Processor", "Helper", "Utils" doing unrelated things
+- Every new feature PR touches the same file
+
+**Refactoring strategy:**
+1. Identify distinct responsibility clusters
+2. Extract cohesive groups into dedicated classes
+3. Use DI to wire them together
+4. Apply Facade if clients need unified access
+
+#### Common Pitfalls:
+- Creating a God Service while splitting repositories (still god-like at service level)
+- Extracting into meaningless thin wrappers — ensure real separation
+
+---
+
+## 2. SPAGHETTI CODE
+
+**Definition:** Code with **tangled, unstructured control flow** — deeply nested conditions, no clear separation, business logic mixed with infrastructure, long methods doing many things.
+
+```java
+// ❌ SPAGHETTI — nested conditions, mixed concerns, no structure
+public void processOrder(Order order) {
+    if (order != null) {
+        if (order.getUser() != null) {
+            if (order.getUser().isActive()) {
+                if (order.getItems() != null && !order.getItems().isEmpty()) {
+                    double total = 0;
+                    for (OrderItem item : order.getItems()) {
+                        if (item != null) {
+                            if (item.getProduct() != null) {
+                                if (item.getProduct().isAvailable()) {
+                                    total += item.getProduct().getPrice() * item.getQuantity();
+                                    // database call mixed in loop
+                                    db.execute("UPDATE inventory SET qty = qty - " +
+                                        item.getQuantity() +
+                                        " WHERE product_id = " + item.getProduct().getId());
+                                }
+                            }
+                        }
+                    }
+                    if (total > 0) {
+                        // payment logic directly here
+                        HttpClient client = new HttpClient();
+                        // ... 50 more lines of HTTP call
+                        if (response.getStatus() == 200) {
+                            // email logic directly here
+                            // ... 30 more lines
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+```java
+// ✅ REFACTORED — guard clauses, extracted methods, separation of concerns
+public void processOrder(Order order) {
+    validateOrder(order);                          // throws if invalid
+    List<OrderItem> validItems = filterValidItems(order.getItems());
+    BigDecimal total = calculateTotal(validItems);
+    inventoryService.reserve(validItems);          // separated concern
+    paymentService.charge(order.getUser(), total); // separated concern
+    notificationService.sendConfirmation(order);   // separated concern
+}
+
+private void validateOrder(Order order) {
+    Objects.requireNonNull(order, "Order must not be null");
+    Objects.requireNonNull(order.getUser(), "Order must have a user");
+    if (!order.getUser().isActive()) throw new UserInactiveException(order.getUser().getId());
+    if (order.getItems() == null || order.getItems().isEmpty()) {
+        throw new EmptyOrderException("Order must contain items");
+    }
+}
+
+private List<OrderItem> filterValidItems(List<OrderItem> items) {
+    return items.stream()
+        .filter(item -> item != null
+            && item.getProduct() != null
+            && item.getProduct().isAvailable())
+        .collect(Collectors.toList());
+}
+
+private BigDecimal calculateTotal(List<OrderItem> items) {
+    return items.stream()
+        .map(i -> i.getProduct().getPrice().multiply(BigDecimal.valueOf(i.getQuantity())))
+        .reduce(BigDecimal.ZERO, BigDecimal::add);
+}
+```
+
+**Key refactoring techniques:**
+- **Guard clauses**: invert conditions and return/throw early — eliminate nesting
+- **Extract Method**: every logical step becomes its own well-named method
+- **Single level of abstraction**: a method should operate at one level (high-level orchestration OR low-level detail, not both)
+- **Arrow anti-pattern**: if indentation looks like `→`, refactor with guard clauses
+
+---
+
+## 3. OVERENGINEERING
+
+**Definition:** Adding complexity, abstractions, and flexibility **that isn't needed** for current requirements. Building for imaginary future requirements.
+
+```java
+// ❌ OVERENGINEERED — solving a simple "add two numbers" requirement
+public interface OperandProvider<T extends Number> {
+    T provide();
+}
+
+public interface OperationStrategy<T extends Number, R extends Number> {
+    R execute(T operand1, T operand2);
+}
+
+public abstract class AbstractCalculatorFactory<T extends Number> {
+    protected abstract OperationStrategy<T, T> createStrategy(OperationType type);
+}
+
+public class GenericCalculatorFactory<T extends Number>
+        extends AbstractCalculatorFactory<T> {
+    @Override
+    protected OperationStrategy<T, T> createStrategy(OperationType type) { ... }
+}
+
+public class CalculatorFacade {
+    private GenericCalculatorFactory<Integer> factory;
+    public Integer calculate(OperationType type, Integer a, Integer b) { ... }
+}
+
+// Usage — just to add two numbers:
+CalculatorFacade facade = new CalculatorFacade(new GenericCalculatorFactory<>());
+Integer result = facade.calculate(OperationType.ADD, 3, 4);
+```
+
+```java
+// ✅ APPROPRIATE — for current requirements
+public class Calculator {
+    public int add(int a, int b) { return a + b; }
+    public int subtract(int a, int b) { return a - b; }
+}
+// Extend with Strategy or Command ONLY when proven necessary
+```
+
+**YAGNI violations to watch for:**
+- Building plugin systems before there's one plugin
+- Creating abstract factories for one concrete type
+- Adding configuration for values that never change
+- Generic parameterization where a single type suffices
+- Building async infrastructure for code that runs in milliseconds
+
+**When abstraction IS justified:**
+- Multiple concrete implementations exist **today** (not "might exist tomorrow")
+- The abstraction is crossed by tests with mocks
+- The boundary is crossed by team/service ownership lines
+
+#### Common Pitfalls:
+- Confusing "good design" with "maximum abstraction"
+- Resume-driven development: using complex patterns to appear sophisticated
+- Premature generalization before the second or third use case appears (Rule of Three)
+
+---
+
+## 4. PREMATURE OPTIMIZATION
+
+**Definition:** Optimizing code **before profiling confirms a bottleneck**, trading readability and maintainability for marginal or imagined performance gains.
+
+> *"Premature optimization is the root of all evil."* — Donald Knuth
+
+```java
+// ❌ PREMATURE OPTIMIZATION — sacrificing clarity for micro-optimizations
+public String buildReport(List<Employee> employees) {
+    // Using StringBuffer instead of StringBuilder "for thread safety" (not needed here)
+    // Manually inlining loop instead of streams "streams are slow"
+    // Pre-sizing arrays with magic numbers "to avoid resize"
+    char[] buffer = new char[employees.size() * 50]; // magic number
+    int pos = 0;
+    for (int i = 0; i < employees.size(); i++) { // index loop instead of for-each
+        Employee e = employees.get(i);
+        // manual string copy to avoid object creation
+        String name = e.getName();
+        for (int j = 0; j < name.length(); j++) {
+            buffer[pos++] = name.charAt(j);
+        }
+        buffer[pos++] = ',';
+    }
+    return new String(buffer, 0, pos);
+}
+
+// ✅ READABLE FIRST — optimize only after profiler confirms this is hot path
+public String buildReport(List<Employee> employees) {
+    return employees.stream()
+        .map(Employee::getName)
+        .collect(Collectors.joining(", "));
+}
+```
+
+**The right optimization process:**
+```
+1. Write clear, correct code
+2. Measure under realistic load (JMH, async-profiler, VisualVM)
+3. Identify actual bottleneck (CPU, I/O, GC, lock contention)
+4. Optimize ONLY the bottleneck
+5. Measure again to confirm improvement
+6. Document WHY the optimization exists
+```
+
+**Legitimate optimizations (not premature):**
+- Choosing `HashMap` over `LinkedList` for O(1) lookups — algorithmic, obvious
+- Using `StringBuilder` in a known hot loop
+- Connection pooling — proven necessity
+- Indexed DB queries — standard practice
+
+**Premature optimization red flags:**
+- Replacing streams with loops "because streams are slow" without measurement
+- Avoiding `Optional` "because of boxing overhead"
+- Hand-writing cache eviction before proving cache hit rate matters
+- Bit manipulation where integer arithmetic is clear
+
+---
+
+## 5. MEMORY LEAKS
+
+**Definition:** Objects that are **no longer needed but still referenced**, preventing garbage collection. Java has GC but is not immune — leaks occur through lingering references.
+
+### Common leak patterns:
+
+**Pattern 1: Static Collections accumulating objects**
+```java
+// ❌ Static cache with no eviction — grows forever
+public class UserCache {
+    private static final Map<Long, User> cache = new HashMap<>(); // never cleared
+
+    public static void put(Long id, User user) {
+        cache.put(id, user); // entries never removed
+    }
+}
+
+// ✅ Use bounded cache with eviction
+private static final Map<Long, User> cache = Collections.synchronizedMap(
+    new LinkedHashMap<Long, User>(1000, 0.75f, true) { // LRU
+        protected boolean removeEldestEntry(Map.Entry<Long, User> eldest) {
+            return size() > 1000; // evict when over 1000 entries
+        }
+    }
+);
+// Or use Caffeine/Guava cache with TTL and max size
+Cache<Long, User> cache = Caffeine.newBuilder()
+    .maximumSize(1000)
+    .expireAfterWrite(10, TimeUnit.MINUTES)
+    .build();
+```
+
+**Pattern 2: Listener / Observer never unregistered**
+```java
+// ❌ Leak — adding listeners but never removing them
+public class Dashboard {
+    public Dashboard(EventBus bus) {
+        bus.subscribe("DATA_UPDATE", this::refresh); // strong reference held in bus
+        // Dashboard can never be GC'd as long as bus is alive
+    }
+}
+
+// ✅ Implement lifecycle-aware cleanup
+public class Dashboard implements AutoCloseable {
+    private final EventBus bus;
+    private final Observer refreshListener;
+
+    public Dashboard(EventBus bus) {
+        this.bus = bus;
+        this.refreshListener = this::refresh;
+        bus.subscribe("DATA_UPDATE", refreshListener);
+    }
+
+    @Override
+    public void close() {
+        bus.unsubscribe("DATA_UPDATE", refreshListener); // explicit cleanup
+    }
+}
+```
+
+**Pattern 3: Inner class holding outer class reference**
+```java
+// ❌ Non-static inner class holds implicit reference to outer Activity/Controller
+public class DataLoader {
+    private byte[] largeData = new byte[10 * 1024 * 1024]; // 10MB
+
+    public Runnable createTask() {
+        return new Runnable() { // anonymous inner class
+            public void run() {
+                // implicitly holds reference to DataLoader instance
+                // DataLoader cannot be GC'd until this Runnable is GC'd
+                process();
+            }
+        };
+    }
+}
+
+// ✅ Static nested class or lambda with explicit capture
+public class DataLoader {
+    private byte[] largeData = new byte[10 * 1024 * 1024];
+
+    public Runnable createTask() {
+        byte[] dataCopy = largeData; // capture only what's needed
+        return () -> process(dataCopy);
+    }
+
+    // Or static nested class — no implicit outer reference
+    private static class Task implements Runnable {
+        private final byte[] data;
+        Task(byte[] data) { this.data = data; }
+        public void run() { process(data); }
+    }
+}
+```
+
+**Pattern 4: ThreadLocal not cleaned up**
+```java
+// ❌ ThreadLocal in thread pool — thread is reused, old value persists
+public class RequestContext {
+    private static final ThreadLocal<User> currentUser = new ThreadLocal<>();
+
+    public static void setUser(User user) { currentUser.set(user); }
+    public static User getUser() { return currentUser.get(); }
+    // No remove() call — next request on same thread sees previous user!
+}
+
+// ✅ Always clean up ThreadLocal in finally block
+public class RequestFilter implements Filter {
+    public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) {
+        try {
+            RequestContext.setUser(resolveUser(req));
+            chain.doFilter(req, res);
+        } finally {
+            RequestContext.clear(); // ALWAYS clean up
+        }
+    }
+}
+```
+
+**Detection tools:** VisualVM, Eclipse MAT (Memory Analyzer Tool), JProfiler, heap dumps with `jmap -dump`
+
+---
+
+## 6. THREAD MISUSE
+
+**Definition:** Incorrect use of threads — creating too many, not reusing them, blocking unnecessarily, or using wrong thread models.
+
+```java
+// ❌ Creating a new thread per request — unbounded thread creation
+public class RequestHandler {
+    public void handleRequest(Request request) {
+        new Thread(() -> {              // new OS thread per request
+            processRequest(request);    // 10k concurrent requests = 10k threads
+        }).start();                     // each thread ~1MB stack = OutOfMemoryError
+    }
+}
+
+// ❌ Using Thread directly for async work
+Thread t = new Thread(() -> fetchFromDatabase());
+t.start();
+t.join(); // blocking the calling thread anyway — no benefit
+
+// ✅ Use ExecutorService with appropriate pool size
+public class RequestHandler {
+    // CPU-bound: pool size ≈ number of CPU cores
+    private final ExecutorService cpuPool =
+        Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+    // IO-bound: pool size can be larger (threads spend time waiting)
+    private final ExecutorService ioPool =
+        Executors.newFixedThreadPool(50); // or use virtual threads (Java 21)
+
+    public CompletableFuture<Response> handleRequest(Request request) {
+        return CompletableFuture
+            .supplyAsync(() -> fetchData(request), ioPool)    // IO on IO pool
+            .thenApplyAsync(data -> process(data), cpuPool);  // CPU on CPU pool
+    }
+}
+
+// ✅ Java 21 Virtual Threads — for IO-bound, high-concurrency workloads
+ExecutorService virtualPool = Executors.newVirtualThreadPerTaskExecutor();
+// Virtual threads are cheap (~few KB) — can have millions concurrently
+```
+
+**Thread pool sizing formula:**
+```
+CPU-bound:  threads = CPU_cores + 1
+IO-bound:   threads = CPU_cores × (1 + wait_time / cpu_time)
+            e.g., 8 cores, 90% IO wait: 8 × (1 + 9) = 80 threads
+```
+
+**Common thread misuse patterns:**
+- `Executors.newCachedThreadPool()` under high load → unbounded thread creation
+- `Executors.newFixedThreadPool(1)` for parallel work → no parallelism
+- Not handling `Future.get()` exceptions → silent failures
+- Calling `Thread.sleep()` for coordination → use `CountDownLatch`, `Semaphore`, or `Phaser`
+
+---
+
+## 7. IMPROPER SYNCHRONIZATION
+
+**Definition:** Either **too little** (race conditions, data corruption) or **too much** synchronization (deadlocks, performance bottlenecks).
+
+### Under-synchronization:
+
+```java
+// ❌ Race condition — check-then-act is not atomic
+public class TicketBookingService {
+    private int availableSeats = 10;
+
+    public boolean bookSeat() {
+        if (availableSeats > 0) {       // check
+            // Thread A and B both pass check when seats = 1
+            availableSeats--;            // act — both decrement, seats goes to -1
+            return true;
+        }
+        return false;
+    }
+}
+
+// ✅ Atomic operation with synchronized
+public synchronized boolean bookSeat() {
+    if (availableSeats > 0) {
+        availableSeats--;
+        return true;
+    }
+    return false;
+}
+
+// ✅ Even better — use AtomicInteger for simple counter
+private final AtomicInteger availableSeats = new AtomicInteger(10);
+
+public boolean bookSeat() {
+    int current;
+    do {
+        current = availableSeats.get();
+        if (current <= 0) return false;
+    } while (!availableSeats.compareAndSet(current, current - 1)); // CAS loop
+    return true;
+}
+```
+
+### Over-synchronization / Deadlock:
+
+```java
+// ❌ DEADLOCK — two threads acquiring locks in opposite order
+public class BankAccount {
+    private double balance;
+    private final Object lock = new Object();
+
+    public void transfer(BankAccount target, double amount) {
+        synchronized (this.lock) {           // Thread A locks Account1
+            synchronized (target.lock) {     // Thread A waits for Account2
+                // Thread B holds Account2 and waits for Account1 → DEADLOCK
+                this.balance -= amount;
+                target.balance += amount;
+            }
+        }
+    }
+}
+
+// ✅ Consistent lock ordering — always lock lower ID first
+public void transfer(BankAccount target, double amount) {
+    BankAccount first = this.id < target.id ? this : target;  // consistent order
+    BankAccount second = this.id < target.id ? target : this;
+
+    synchronized (first.lock) {
+        synchronized (second.lock) {
+            this.balance -= amount;
+            target.balance += amount;
+        }
+    }
+}
+
+// ✅ Even better — use tryLock with timeout (deadlock-safe)
+public boolean transfer(BankAccount target, double amount) throws InterruptedException {
+    if (this.lock.tryLock(50, TimeUnit.MILLISECONDS)) {
+        try {
+            if (target.lock.tryLock(50, TimeUnit.MILLISECONDS)) {
+                try {
+                    this.balance -= amount;
+                    target.balance += amount;
+                    return true;
+                } finally { target.lock.unlock(); }
+            }
+        } finally { this.lock.unlock(); }
+    }
+    return false; // retry or fail
+}
+```
+
+### Visibility issues without `volatile`:
+```java
+// ❌ Visibility bug — JVM may cache running in register, loop never exits
+public class Worker {
+    private boolean running = true; // not volatile
+
+    public void stop() { running = false; } // written by main thread
+
+    public void run() {
+        while (running) { // read by worker thread — may see stale cached value
+            doWork();
+        }
+    }
+}
+
+// ✅ volatile ensures visibility across threads
+private volatile boolean running = true;
+```
+
+---
+
+## 8. OVERUSE OF INHERITANCE
+
+**Definition:** Using inheritance for **code reuse** when composition would be clearer, more flexible, and less coupled.
+
+```java
+// ❌ INHERITANCE ABUSE — Stack extending Vector (real Java mistake)
+// java.util.Stack extends java.util.Vector
+// Result: Stack exposes get(index), add(index, element), remove(index)
+// These operations violate the Stack contract (LIFO only)
+Stack<Integer> stack = new Stack<>();
+stack.add(0, 99); // inserts at position 0 — meaningless for a stack!
+stack.get(2);     // random access — not stack behavior
+
+// ❌ Using inheritance purely for code reuse (wrong reason)
+public class Animal {
+    public void eat() { ... }
+    public void sleep() { ... }
+    public void breathe() { ... }
+}
+
+public class Robot extends Animal {
+    // Robot doesn't eat/sleep/breathe — but reuses the class structure
+    // Violates IS-A relationship — Robot IS NOT AN Animal
+}
+
+// ❌ Deep inheritance hierarchy — fragile base class problem
+public class A { protected int x = 10; }
+public class B extends A { public void foo() { x = 20; } }
+public class C extends B { public void bar() { System.out.println(x); } }
+public class D extends C { /* change to A breaks D */ }
+// Changing A's internals silently breaks B, C, D
+```
+
+```java
+// ✅ COMPOSITION over inheritance — "has-a" not "is-a"
+public class Stack<T> {
+    private final Deque<T> storage = new ArrayDeque<>(); // composed, not inherited
+
+    public void push(T item) { storage.push(item); }
+    public T pop() { return storage.pop(); }
+    public T peek() { return storage.peek(); }
+    public boolean isEmpty() { return storage.isEmpty(); }
+    // No exposure of arbitrary list operations — clean interface
+}
+
+// ✅ Delegation pattern
+public class InstrumentedList<E> implements List<E> {
+    private final List<E> delegate; // delegate — not extend
+    private int addCount = 0;
+
+    public InstrumentedList(List<E> delegate) { this.delegate = delegate; }
+
+    @Override
+    public boolean add(E e) {
+        addCount++;
+        return delegate.add(e);
+    }
+
+    public int getAddCount() { return addCount; }
+
+    // All other methods delegate cleanly
+    @Override public int size() { return delegate.size(); }
+    // ...
+}
+```
+
+**Inheritance is appropriate when:**
+- A true IS-A relationship exists (semantically, not just for reuse)
+- The subclass really is a specialization of the base
+- You're designing for extension (Template Method, frameworks)
+- The hierarchy is shallow (1-2 levels) and stable
+
+**The Liskov Substitution Principle test:**
+> Can you substitute the subclass anywhere the parent is expected without breaking behavior? If no → don't use inheritance.
+
+---
+
+## 9. TIGHT COUPLING
+
+**Definition:** Components that **directly depend on concrete implementations** of other components — changes in one force changes in another.
+
+```java
+// ❌ TIGHTLY COUPLED — OrderService directly depends on concrete classes
+public class OrderService {
+    private MySQLOrderRepository repository = new MySQLOrderRepository(); // hardcoded
+    private StripePaymentProcessor payment = new StripePaymentProcessor(); // hardcoded
+    private SendGridEmailService email = new SendGridEmailService();       // hardcoded
+
+    public void placeOrder(Order order) {
+        repository.save(order);
+        payment.charge(order.getUser(), order.getTotal());
+        email.sendConfirmation(order);
+    }
+    // Can't switch to PostgreSQL, PayPal, or Mailgun without editing this class
+    // Can't unit test without real DB/Stripe/SendGrid
+}
+
+// ✅ LOOSELY COUPLED — depend on interfaces, inject implementations
+public interface OrderRepository { Order save(Order order); }
+public interface PaymentProcessor { void charge(User user, BigDecimal amount); }
+public interface EmailService { void sendConfirmation(Order order); }
+
+public class OrderService {
+    private final OrderRepository repository;
+    private final PaymentProcessor payment;
+    private final EmailService email;
+
+    // Constructor injection — depends on abstractions
+    public OrderService(OrderRepository repository,
+                        PaymentProcessor payment,
+                        EmailService email) {
+        this.repository = repository;
+        this.payment = payment;
+        this.email = email;
+    }
+
+    public void placeOrder(Order order) {
+        repository.save(order);
+        payment.charge(order.getUser(), order.getTotal());
+        email.sendConfirmation(order);
+    }
+    // Swap MySQL for Mongo: change one DI binding
+    // Unit test: inject mocks for all three
+}
+```
+
+**Coupling metrics:**
+- **Afferent coupling (Ca)**: how many classes depend on this class — high = risky to change
+- **Efferent coupling (Ce)**: how many classes this class depends on — high = fragile
+- **Instability = Ce / (Ca + Ce)**: 0 = stable, 1 = unstable
+- Core domain should be stable (low instability); infrastructure should be unstable (easily swappable)
+
+---
+
+## 10. STATIC ABUSE
+
+**Definition:** Overusing `static` for state, utility, or behavior — creates hidden global state, prevents testing, breaks OOP principles.
+
+```java
+// ❌ STATIC STATE — global mutable state
+public class AppConfig {
+    public static String dbUrl = "jdbc:mysql://localhost/prod"; // mutable global
+    public static int maxConnections = 10;
+
+    // Any code anywhere can mutate this
+    // Thread-unsafe
+    // Impossible to have different configs in tests
+}
+
+// ❌ STATIC SERVICE LOCATOR — hidden dependency
+public class OrderService {
+    public void process(Order order) {
+        // Hidden dependency — not visible from constructor
+        PaymentService payment = ServiceRegistry.getPaymentService(); // static call
+        payment.charge(order);
+    }
+    // Impossible to test without real ServiceRegistry setup
+}
+
+// ❌ STATIC methods holding state (common in legacy code)
+public class UserSession {
+    private static User currentUser;   // shared across all threads!
+    private static String sessionToken;
+
+    public static void setUser(User user) { currentUser = user; } // not thread-safe
+    public static User getUser() { return currentUser; }
+}
+```
+
+```java
+// ✅ Static is appropriate for PURE utility functions (stateless, no side effects)
+public final class StringUtils {
+    private StringUtils() {} // prevent instantiation
+
+    public static boolean isNullOrEmpty(String s) {
+        return s == null || s.isEmpty();
+    }
+
+    public static String capitalize(String s) {
+        if (isNullOrEmpty(s)) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1).toLowerCase();
+    }
+}
+
+// ✅ Static constants (truly immutable)
+public final class HttpStatus {
+    public static final int OK = 200;
+    public static final int NOT_FOUND = 404;
+    private HttpStatus() {}
+}
+
+// ✅ Thread-local for per-thread state (not truly global)
+public class RequestContext {
+    private static final ThreadLocal<User> currentUser = new ThreadLocal<>();
+    public static void set(User user) { currentUser.set(user); }
+    public static User get() { return currentUser.get(); }
+    public static void clear() { currentUser.remove(); }
+}
+```
+
+**Rule of thumb:** `static` = no `this` = no instance = no polymorphism = no mocking = hard to test. Use only for stateless utilities and true constants.
+
+---
+
+## 11. EXCEPTION SWALLOWING
+
+**Definition:** Catching exceptions and **doing nothing** (or logging and continuing) — hiding failures that should surface and be handled.
+
+```java
+// ❌ WORST CASE — silent swallow
+try {
+    processPayment(order);
+} catch (Exception e) {
+    // EMPTY — payment failed, nobody knows, order marked complete
+}
+
+// ❌ LOG AND IGNORE — slightly better but still wrong for critical paths
+try {
+    chargeCustomer(amount);
+} catch (PaymentException e) {
+    log.error("Payment failed", e); // logged, but execution continues!
+    // Customer not charged, but order fulfillment proceeds
+}
+
+// ❌ OVER-BROAD CATCH — masks the real exception type
+try {
+    parseConfig();
+    connectToDatabase();
+    loadUser(id);
+} catch (Exception e) {      // catches NullPointerException, ClassCastException,
+    log.warn("Something failed"); // ConfigParseException — all treated the same
+}
+```
+
+```java
+// ✅ Catch specific exceptions, handle meaningfully or rethrow
+public Order processOrder(Order order) {
+    try {
+        inventoryService.reserve(order);
+    } catch (InsufficientInventoryException e) {
+        // Meaningful handling — domain-specific response
+        throw new OrderFailedException("Items unavailable: " + e.getItems(), e);
+    }
+
+    try {
+        paymentService.charge(order.getUser(), order.getTotal());
+    } catch (PaymentDeclinedException e) {
+        inventoryService.release(order); // compensating action
+        throw new OrderFailedException("Payment declined", e);
+    } catch (PaymentServiceUnavailableException e) {
+        inventoryService.release(order);
+        // Retryable — wrap in retryable exception
+        throw new RetryableOrderException("Payment service down, retry later", e);
+    }
+
+    return orderRepository.save(order);
+}
+
+// ✅ Exception translation at layer boundaries
+// Don't let SQLException leak from repository into service layer
+public User findById(Long id) {
+    try {
+        return jdbcTemplate.queryForObject(SQL, userMapper, id);
+    } catch (EmptyResultDataAccessException e) {
+        return null; // translate to domain expectation
+    } catch (DataAccessException e) {
+        throw new UserRepositoryException("Failed to find user: " + id, e); // translate
+    }
+}
+
+// ✅ Use try-with-resources — never swallow resource close exceptions
+try (Connection conn = dataSource.getConnection();
+     PreparedStatement ps = conn.prepareStatement(SQL)) {
+    // resources auto-closed, close exceptions surfaced via Suppressed
+}
+```
+
+**InterruptedException — special case:**
+```java
+// ❌ Swallowing InterruptedException clears the interrupt flag
+try {
+    Thread.sleep(1000);
+} catch (InterruptedException e) {
+    // swallowed — thread's interrupt status cleared, caller can't know
+}
+
+// ✅ Restore interrupt flag or rethrow
+try {
+    Thread.sleep(1000);
+} catch (InterruptedException e) {
+    Thread.currentThread().interrupt(); // restore interrupt flag
+    throw new RuntimeException("Task interrupted", e); // or handle gracefully
+}
+```
+
+---
+
+## 12. RESOURCE LEAKS
+
+**Definition:** Failing to **close resources** (connections, streams, files, sockets) after use — exhausts connection pools, file descriptors, and causes OutOfMemoryError.
+
+```java
+// ❌ RESOURCE LEAK — connection not closed on exception
+public List<User> findAll() throws SQLException {
+    Connection conn = dataSource.getConnection();  // leak if exception thrown
+    PreparedStatement ps = conn.prepareStatement("SELECT * FROM users");
+    ResultSet rs = ps.executeQuery();
+    List<User> users = mapUsers(rs); // if this throws, conn/ps/rs never closed
+    rs.close();
+    ps.close();
+    conn.close();
+    return users;
+}
+
+// ❌ STREAM LEAK — common mistake
+public String readFile(String path) throws IOException {
+    FileInputStream fis = new FileInputStream(path);
+    BufferedReader reader = new BufferedReader(new InputStreamReader(fis));
+    return reader.lines().collect(Collectors.joining("\n")); // reader never closed
+}
+```
+
+```java
+// ✅ try-with-resources — AutoCloseable resources always closed
+public List<User> findAll() throws SQLException {
+    try (Connection conn = dataSource.getConnection();
+         PreparedStatement ps = conn.prepareStatement("SELECT * FROM users");
+         ResultSet rs = ps.executeQuery()) {
+
+        return mapUsers(rs);
+        // conn, ps, rs all closed in reverse order automatically
+        // even if mapUsers() throws an exception
+    }
+}
+
+// ✅ Stream automatically closed
+public String readFile(String path) throws IOException {
+    try (BufferedReader reader = Files.newBufferedReader(Path.of(path))) {
+        return reader.lines().collect(Collectors.joining("\n"));
+    }
+}
+
+// ✅ Custom AutoCloseable resource
+public class ManagedConnection implements AutoCloseable {
+    private final Connection connection;
+
+    public ManagedConnection(DataSource ds) throws SQLException {
+        this.connection = ds.getConnection();
+    }
+
+    @Override
+    public void close() throws SQLException {
+        if (connection != null && !connection.isClosed()) {
+            connection.close();
+        }
+    }
+}
+
+// Usage
+try (ManagedConnection mc = new ManagedConnection(dataSource)) {
+    // use mc.connection
+} // auto-closed
+```
+
+**Connection pool exhaustion pattern:**
+```java
+// ❌ Holding connections longer than necessary
+public void generateReport() throws SQLException {
+    Connection conn = dataSource.getConnection(); // held for entire report
+    List<Order> orders = loadOrders(conn);        // DB call
+    // ... 5 seconds of CPU-intensive report generation ...
+    // ... connection held idle while report generates ...
+    List<User> users = loadUsers(conn);           // another DB call
+    conn.close();
+}
+
+// ✅ Minimize connection hold time
+public void generateReport() throws SQLException {
+    List<Order> orders;
+    List<User> users;
+
+    try (Connection conn = dataSource.getConnection()) {
+        orders = loadOrders(conn); // get data fast
+        users = loadUsers(conn);
+    } // connection returned to pool immediately
+
+    generateReportFromData(orders, users); // CPU work without holding connection
+}
+```
+
+---
+
+## 13. BLOCKING CALLS IN ASYNC FLOWS
+
+**Definition:** Making **synchronous blocking calls** inside reactive/async pipelines — negates the benefits of non-blocking I/O, starves the event loop thread.
+
+```java
+// ❌ BLOCKING in reactive pipeline — starves Reactor/RxJava scheduler
+public Mono<Order> processOrder(Long orderId) {
+    return Mono.fromCallable(() -> {
+        Order order = orderRepository.findById(orderId).get(); // BLOCKING JPA call
+        // This blocks a Reactor thread (from bounded elastic pool)
+        // Under load, all threads blocked = entire application stalls
+        return order;
+    });
+}
+
+// ❌ Blocking inside CompletableFuture without specifying executor
+CompletableFuture<User> future = CompletableFuture.supplyAsync(() -> {
+    return userRepository.findById(id); // blocks common ForkJoinPool thread
+    // ForkJoinPool is for CPU work, not I/O blocking
+});
+
+// ❌ .get() inside async flow — converts async to sync
+public CompletableFuture<Order> processAsync(Long id) {
+    CompletableFuture<User> userFuture = fetchUserAsync(id);
+    User user = userFuture.get(); // BLOCKING — defeats the purpose
+    return processOrder(user);
+}
+```
+
+```java
+// ✅ Keep reactive pipeline fully non-blocking with R2DBC
+public Mono<Order> processOrder(Long orderId) {
+    return r2dbcOrderRepository.findById(orderId)  // non-blocking DB driver
+        .switchIfEmpty(Mono.error(new OrderNotFoundException(orderId)))
+        .flatMap(order -> paymentService.chargeReactive(order)) // non-blocking
+        .flatMap(order -> notificationService.notifyReactive(order));
+}
+
+// ✅ If you MUST do blocking I/O in reactive — offload to bounded elastic scheduler
+public Mono<Order> processOrder(Long orderId) {
+    return Mono.fromCallable(() -> blockingJpaRepository.findById(orderId))
+        .subscribeOn(Schedulers.boundedElastic()) // dedicated blocking thread pool
+        .flatMap(order -> reactivePaymentService.charge(order));
+}
+
+// ✅ CompletableFuture — use async composition, never .get() in chains
+public CompletableFuture<Order> processAsync(Long id) {
+    return fetchUserAsync(id)
+        .thenCompose(user -> fetchOrderAsync(user))  // async chain
+        .thenApply(order -> enrich(order))           // transform
+        .exceptionally(ex -> handleError(ex));       // error handling
+    // No blocking anywhere in the chain
+}
+```
+
+**Reactor thread model:**
+```
+Non-blocking schedulers (never block here):
+  Schedulers.parallel()       → CPU work, n = CPU cores
+  Schedulers.single()         → single-threaded sequential
+
+Blocking-tolerant schedulers:
+  Schedulers.boundedElastic() → blocking I/O, dynamically sized, bounded
+  Schedulers.fromExecutor(ioPool) → custom pool for blocking work
+```
+
+---
+
+## 14. IMPROPER CACHING
+
+**Definition:** Cache implementations that are **too naive, unbounded, stale, inconsistent**, or applied to the wrong layer.
+
+```java
+// ❌ UNBOUNDED CACHE — classic memory leak disguised as optimization
+public class ProductService {
+    private Map<Long, Product> cache = new HashMap<>(); // grows forever
+
+    public Product getProduct(Long id) {
+        if (!cache.containsKey(id)) {
+            cache.put(id, productRepository.findById(id));
+        }
+        return cache.get(id); // stale data — no TTL, no eviction
+    }
+}
+
+// ❌ CACHE STAMPEDE — multiple threads all miss cache simultaneously
+public Product getProduct(Long id) {
+    Product cached = cache.get(id);
+    if (cached == null) {
+        // 100 threads all see null simultaneously under load
+        // All 100 make DB call — thundering herd
+        cached = productRepository.findById(id);
+        cache.put(id, cached);
+    }
+    return cached;
+}
+
+// ❌ CACHING MUTABLE OBJECTS — cache returns reference, caller mutates it
+public Order getCachedOrder(Long id) {
+    return cache.get(id); // returns same object reference
+    // Caller: order.setStatus("CANCELLED") — mutates the cached object!
+}
+```
+
+```java
+// ✅ Caffeine cache — bounded, TTL, with proper stampede protection
+@Service
+public class ProductService {
+    private final Cache<Long, Product> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(5, TimeUnit.MINUTES)
+        .expireAfterAccess(2, TimeUnit.MINUTES)
+        .recordStats()  // for monitoring hit rate
+        .build();
+
+    public Product getProduct(Long id) {
+        // get() with loader — atomic, prevents stampede (only one loader per key)
+        return cache.get(id, productRepository::findById);
+    }
+}
+
+// ✅ Cache defensive copies of mutable objects
+public Order getCachedOrder(Long id) {
+    Order cached = cache.get(id);
+    return cached != null ? cached.deepCopy() : null; // return copy, not reference
+}
+
+// ✅ Cache invalidation on mutation
+@Service
+public class OrderService {
+    @Autowired private Cache<Long, Order> orderCache;
+
+    public Order updateOrder(Long id, OrderUpdate update) {
+        Order updated = orderRepository.update(id, update);
+        orderCache.invalidate(id);      // evict stale entry
+        // OR: orderCache.put(id, updated);  — update cache
+        return updated;
+    }
+}
+
+// ✅ Spring Cache abstraction with proper config
+@Cacheable(value = "products", key = "#id",
+           condition = "#id != null",
+           unless = "#result == null")
+public Product getProduct(Long id) {
+    return productRepository.findById(id);
+}
+
+@CacheEvict(value = "products", key = "#product.id")
+public Product updateProduct(Product product) {
+    return productRepository.save(product);
+}
+```
+
+**Cache anti-pattern checklist:**
+- No size bound → memory leak
+- No TTL → stale data served indefinitely
+- No stampede protection → thundering herd under high load
+- Caching mutable state → invisible data corruption
+- Caching exceptions → transient errors cached permanently
+- Wrong layer → caching in DB when should be in application, or vice versa
+- No cache metrics → unaware of hit rate / effectiveness
+
+---
+
+## 15. MONOLITHIC SERVICES
+
+**Definition:** A service that **does everything** — all business domains packed into a single deployable unit. Difficult to scale, deploy, and maintain independently.
+
+```
+❌ MONOLITH STRUCTURE:
+
+[Single WAR/JAR]
+├── UserModule (auth, profile, preferences)
+├── OrderModule (cart, checkout, history)
+├── PaymentModule (billing, invoicing)
+├── InventoryModule (stock, warehouse)
+├── ShippingModule (tracking, carriers)
+├── NotificationModule (email, SMS, push)
+└── ReportingModule (analytics, BI)
+
+One change in Notification requires redeploying EVERYTHING.
+One memory leak in Reporting takes down Orders.
+Scaling Orders means scaling everything.
+```
+
+```
+✅ MODULAR MONOLITH (pragmatic intermediate step):
+
+[Single JAR — modular packages]
+├── com.app.user/         → UserService, UserRepository (internal only)
+│   └── api/             → UserFacade (public contract for cross-module calls)
+├── com.app.order/
+│   └── api/             → OrderFacade
+├── com.app.payment/
+│   └── api/             → PaymentFacade
+│
+Module boundaries enforced by architecture tests (ArchUnit):
+  "order package must not depend on payment internals"
+  "only api packages are accessible cross-module"
+```
+
+```java
+// ✅ Domain event boundary — decouple modules without microservices overhead
+// Instead of OrderService directly calling NotificationService:
+public class OrderService {
+    private final ApplicationEventPublisher eventPublisher;
+
+    public Order placeOrder(Order order) {
+        Order saved = orderRepository.save(order);
+        // Publish domain event — don't know who listens
+        eventPublisher.publishEvent(new OrderPlacedEvent(saved.getId(), saved.getUserId()));
+        return saved;
+    }
+}
+
+@Service
+public class NotificationListener {
+    @EventListener
+    @Async  // async in same JVM, or Kafka for cross-service
+    public void onOrderPlaced(OrderPlacedEvent event) {
+        notificationService.sendOrderConfirmation(event.getOrderId());
+    }
+}
+// Transition to microservices: replace @EventListener with Kafka consumer
+// No change to OrderService needed
+```
+
+**Monolith → Microservices migration signals:**
+- Distinct scaling requirements (Orders: 100x load vs Reports: 1x load)
+- Separate deployment velocity (Payments needs daily releases, Reporting weekly)
+- Separate team ownership
+- Different technology requirements
+
+**Anti-pattern: Distributed monolith** (worst of both worlds):
+```
+Multiple services that must ALL be deployed together because they share:
+- A single database
+- Synchronous HTTP chains (A calls B calls C calls D — tight coupling)
+- Shared libraries with domain logic
+Result: Deployment coupling of monolith + operational overhead of microservices
+```
+
+---
+
+## 16. SHARED MUTABLE STATE
+
+**Definition:** Multiple threads or components reading **and writing the same data** without proper synchronization — root cause of most concurrency bugs.
+
+```java
+// ❌ SHARED MUTABLE STATE — classic counter race condition
+public class HitCounter {
+    private int count = 0; // mutable, shared across threads
+
+    public void increment() { count++; }  // NOT atomic: read → increment → write
+    public int getCount() { return count; }
+}
+// With 1000 threads each calling increment() 1000 times:
+// Expected: 1,000,000 — Actual: anywhere from 500,000 to 1,000,000 (data races)
+
+// ❌ SHARED MUTABLE COLLECTION — iterator and modifier on different threads
+public class UserRegistry {
+    private List<User> users = new ArrayList<>(); // not thread-safe
+
+    public void addUser(User user) { users.add(user); }  // Thread A
+    public List<User> getAllUsers() { return users; }    // Thread B iterates while A modifies
+    // ConcurrentModificationException or worse — silent corruption
+}
+```
+
+```java
+// ✅ IMMUTABLE STATE — thread-safe by design
+public final class Money {
+    private final BigDecimal amount;   // final — immutable
+    private final Currency currency;   // final — immutable
+
+    public Money(BigDecimal amount, Currency currency) {
+        this.amount = amount;
+        this.currency = currency;
+    }
+
+    // Returns new object — never modifies this
+    public Money add(Money other) {
+        if (!this.currency.equals(other.currency)) throw new CurrencyMismatchException();
+        return new Money(this.amount.add(other.amount), this.currency);
+    }
+}
+
+// ✅ Atomic variables for simple shared counters
+public class HitCounter {
+    private final AtomicLong count = new AtomicLong(0);
+    public void increment() { count.incrementAndGet(); } // atomic CAS operation
+    public long getCount() { return count.get(); }
+}
+
+// ✅ Thread-safe collections
+public class UserRegistry {
+    // Read-heavy: CopyOnWriteArrayList
+    private final List<User> users = new CopyOnWriteArrayList<>();
+
+    // Read-write balanced: ConcurrentHashMap
+    private final Map<Long, User> userMap = new ConcurrentHashMap<>();
+
+    // Concurrent queue for producer-consumer
+    private final BlockingQueue<Task> taskQueue = new LinkedBlockingQueue<>(1000);
+}
+
+// ✅ Confinement — each thread has its own copy
+public class ReportGenerator {
+    // NOT shared — new instance per request/thread
+    public Report generate(ReportRequest request) {
+        List<DataPoint> localBuffer = new ArrayList<>(); // thread-local, not shared
+        // ... populate localBuffer ...
+        return new Report(localBuffer);
+    }
+}
+```
+
+**Concurrency control options:**
+```
+Immutability          → no synchronization needed (best)
+Thread confinement    → only one thread owns the data (stack variables)
+AtomicXxx             → lock-free CAS for simple counters/references
+synchronized block    → mutual exclusion, correct but can contend
+ReentrantLock         → more flexible than synchronized (tryLock, fairness)
+ReadWriteLock         → concurrent reads, exclusive writes
+ConcurrentCollections → designed for concurrent access
+STM (e.g. Multiverse) → transactional memory (rare in Java)
+```
+
+---
+
+## 17. OVERLOADED CONSTRUCTORS
+
+**Definition:** A class with **many constructor overloads** to handle optional parameters — leads to confusion about which constructor to call, potential for incorrect defaults.
+
+```java
+// ❌ TELESCOPING CONSTRUCTORS — 6 constructors for one class
+public class HttpRequest {
+    public HttpRequest(String url) {
+        this(url, "GET");
+    }
+    public HttpRequest(String url, String method) {
+        this(url, method, null);
+    }
+    public HttpRequest(String url, String method, Map<String, String> headers) {
+        this(url, method, headers, null);
+    }
+    public HttpRequest(String url, String method, Map<String, String> headers,
+                       String body) {
+        this(url, method, headers, body, 30);
+    }
+    public HttpRequest(String url, String method, Map<String, String> headers,
+                       String body, int timeoutSeconds) {
+        this(url, method, headers, body, timeoutSeconds, false);
+    }
+    public HttpRequest(String url, String method, Map<String, String> headers,
+                       String body, int timeoutSeconds, boolean followRedirects) {
+        // finally, actual initialization
+    }
+    // Client call: new HttpRequest("url", null, null, null, 30, false)
+    // What does null mean here? What's the default for followRedirects?
+}
+```
+
+```java
+// ✅ BUILDER PATTERN — solves telescoping constructors
+public class HttpRequest {
+    private final String url;           // required
+    private final String method;        // default: GET
+    private final Map<String, String> headers;
+    private final String body;
+    private final int timeoutSeconds;   // default: 30
+    private final boolean followRedirects; // default: true
+
+    private HttpRequest(Builder builder) {
+        this.url = Objects.requireNonNull(builder.url, "URL is required");
+        this.method = builder.method;
+        this.headers = Collections.unmodifiableMap(builder.headers);
+        this.body = builder.body;
+        this.timeoutSeconds = builder.timeoutSeconds;
+        this.followRedirects = builder.followRedirects;
+    }
+
+    public static class Builder {
+        private final String url;  // required
+        private String method = "GET";
+        private Map<String, String> headers = new HashMap<>();
+        private String body;
+        private int timeoutSeconds = 30;
+        private boolean followRedirects = true;
+
+        public Builder(String url) { this.url = url; }
+        public Builder method(String method) { this.method = method; return this; }
+        public Builder header(String key, String value) {
+            this.headers.put(key, value); return this;
+        }
+        public Builder body(String body) { this.body = body; return this; }
+        public Builder timeout(int seconds) { this.timeoutSeconds = seconds; return this; }
+        public Builder followRedirects(boolean follow) {
+            this.followRedirects = follow; return this;
+        }
+        public HttpRequest build() { return new HttpRequest(this); }
+    }
+}
+
+// Self-documenting usage
+HttpRequest request = new HttpRequest.Builder("https://api.example.com/orders")
+    .method("POST")
+    .header("Authorization", "Bearer token123")
+    .header("Content-Type", "application/json")
+    .body("{\"item\": \"123\"}")
+    .timeout(60)
+    .build();
+```
+
+**When multiple constructors ARE acceptable:**
+- 1-2 required params, no optional ones
+- Named static factory methods clarify intent: `User.withEmail()`, `User.withUsername()`
+- `@JsonCreator` deserialization constructors (single, specific purpose)
+
+---
+
+## 18. CIRCULAR DEPENDENCIES
+
+**Definition:** A **→ B → C → A** — classes or modules depend on each other directly or transitively, creating a cycle. Prevents independent compilation, testing, and deployment.
+
+```java
+// ❌ CIRCULAR CLASS DEPENDENCY
+public class UserService {
+    @Autowired
+    private OrderService orderService; // UserService → OrderService
+
+    public List<Order> getUserOrders(Long userId) {
+        return orderService.findByUser(userId);
+    }
+}
+
+public class OrderService {
+    @Autowired
+    private UserService userService; // OrderService → UserService → CYCLE
+
+    public void validateOrder(Order order) {
+        User user = userService.findById(order.getUserId());
+        // ...
+    }
+}
+// Spring throws: UnsatisfiedDependencyException: circular reference
+```
+
+```java
+// ✅ SOLUTION 1 — Extract shared dependency (most common, cleanest)
+// The cycle usually signals missing abstraction
+
+public class UserRepository {
+    public User findById(Long id) { ... } // no dependency on OrderService
+}
+
+public class OrderRepository {
+    public List<Order> findByUserId(Long userId) { ... } // no dependency on UserService
+}
+
+// Both services now depend on repositories, not each other
+public class UserService {
+    @Autowired private UserRepository userRepository;
+    @Autowired private OrderRepository orderRepository; // data access, no cycle
+
+    public List<Order> getUserOrders(Long userId) {
+        return orderRepository.findByUserId(userId);
+    }
+}
+
+public class OrderService {
+    @Autowired private OrderRepository orderRepository;
+    @Autowired private UserRepository userRepository; // no cycle
+
+    public void validateOrder(Order order) {
+        User user = userRepository.findById(order.getUserId());
+    }
+}
+```
+
+```java
+// ✅ SOLUTION 2 — Domain events (decouple via events)
+// OrderService publishes event; UserService listens — no direct dependency
+public class OrderService {
+    @Autowired private ApplicationEventPublisher eventPublisher;
+
+    public void completeOrder(Order order) {
+        orderRepository.save(order);
+        eventPublisher.publishEvent(new OrderCompletedEvent(order)); // no UserService ref
+    }
+}
+
+@Service
+public class UserService {
+    @EventListener
+    public void onOrderCompleted(OrderCompletedEvent event) {
+        // update user statistics, etc. — no reference to OrderService
+    }
+}
+```
+
+```java
+// ✅ SOLUTION 3 — @Lazy (Spring workaround, not architectural fix)
+@Service
+public class UserService {
+    @Autowired @Lazy  // breaks cycle by using proxy, initializes lazily
+    private OrderService orderService;
+}
+// Warning: hides the design problem — prefer architectural fix
+```
+
+**Detecting circular dependencies:**
+```bash
+# ArchUnit test to enforce no cycles
+@AnalyzeClasses(packages = "com.app")
+public class ArchitectureTest {
+    @ArchTest
+    static final ArchRule noCycles =
+        slices().matching("com.app.(*)..").should().beFreeOfCycles();
+}
+```
+
+**Module-level circular dependency (Maven/Gradle):**
+```
+❌ order-service module depends on user-service module
+   user-service module depends on order-service module
+   → Build systems cannot resolve build order
+
+✅ Extract shared-domain module (DTOs, interfaces, events)
+   Both order-service and user-service depend on shared-domain
+   No cycles at module level
+```
+
+---
+
+## 19. INTERVIEW QUESTIONS
+
+**Q1. What makes a God Object hard to unit test specifically?**
+
+> God Objects have too many dependencies — you'd need to mock 10-15 collaborators per test. Each test method tests behavior spanning multiple concerns, making it impossible to isolate failures. The class can't be instantiated in isolation. Fields are often initialized with real objects inside the constructor, preventing injection of test doubles. The fix isn't just breaking the class apart — you must identify cohesive responsibility clusters and re-model the domain.
+
+---
+
+**Q2. How is a race condition different from a deadlock?**
+
+> Race condition: two threads access shared state concurrently and the outcome depends on scheduling order — leads to data corruption or incorrect results. Deadlock: two or more threads are permanently blocked waiting for each other to release locks — no progress is made. Race conditions are data correctness issues; deadlocks are liveness issues. Detection: race conditions require careful code analysis or tools like ThreadSanitizer; deadlocks show up as hung threads in thread dumps (`jstack`), all in `BLOCKED` state with circular lock ownership.
+
+---
+
+**Q3. Explain why exception swallowing is particularly dangerous in distributed systems.**
+
+> In distributed systems, operations that fail silently can cause consistency violations across services. A payment that fails silently means the customer isn't charged but the order proceeds — financial data corruption. In an event-driven architecture, a silently failed event handler means downstream systems never receive the signal to update their state. Distributed tracing (Jaeger, Zipkin) can't track what was never propagated. The fix: always propagate exceptions to the caller or publish to a dead letter queue (DLQ) for retry and alerting.
+
+---
+
+**Q4. What's the difference between a memory leak and high memory usage in Java?**
+
+> High memory usage: application legitimately uses large amounts of memory for valid, reachable objects — may indicate need for more heap or optimization. Memory leak: objects are kept reachable by references they shouldn't have — GC cannot collect them. The key indicator of a leak is **heap usage that grows monotonically over time** and never decreases even after GC runs. Tools: take two heap dumps 30 minutes apart, compare object counts in Eclipse MAT — objects whose count keeps growing are leak suspects. `jstat -gcutil <pid>` shows if GC reclaims full heap or if old gen keeps growing.
+
+---
+
+**Q5. When is tight coupling actually acceptable?**
+
+> Tight coupling is acceptable at **module boundaries you control and are unlikely to change**, such as within the same bounded context where the classes are highly cohesive. For example: a `User` entity and its `UserValidator` may be tightly coupled because they change together. Coupling is problematic across architectural boundaries (service → repository, controller → service), where implementation details should be hidden. The rule: couple to things that are stable and abstract; avoid coupling to things that are volatile and concrete.
+
+---
+
+**Q6. How would you detect and resolve a blocking call in a reactive pipeline in production?**
+
+> Detection: (1) Reactor's `BlockHound` agent throws errors when blocking calls are detected on non-blocking threads — run in staging. (2) Thread dumps showing non-blocking scheduler threads in `WAITING`/`TIMED_WAITING` state. (3) High scheduler thread count with low throughput in metrics. Resolution: (1) Identify the blocking operation — usually JDBC, HTTP, file I/O. (2) Either replace with reactive equivalent (R2DBC, WebClient) or offload to `Schedulers.boundedElastic()` using `subscribeOn()`. (3) Never use `Schedulers.parallel()` or `Schedulers.single()` for blocking work.
+
+---
+
+**Q7. Describe a cache stampede and three ways to prevent it.**
+
+> Cache stampede (thundering herd): a cached value expires, and simultaneously hundreds of requests find the cache empty and all attempt to recompute the value — overwhelming the database. Three solutions: (1) **Probabilistic early expiration**: start refreshing the cache before it actually expires, based on a probability that increases as expiration approaches. (2) **Locking/mutex**: first request that finds cache empty acquires a lock and computes the value; others wait and then read the now-populated cache — Caffeine's `get(key, loader)` does this. (3) **Background refresh**: cache returns stale value while asynchronously refreshing — Caffeine's `refreshAfterWrite` implements this.
+
+---
+
+**Q8. Why is `static` state problematic in multi-tenant applications specifically?**
+
+> In a multi-tenant application, different tenants must see their own isolated data. Static state is JVM-global — all tenant requests share it. If `TenantContext.currentTenant` is a static field rather than ThreadLocal, Tenant A's request can overwrite or read Tenant B's context. Even with ThreadLocal, if async operations switch threads (CompletableFuture, reactive), the ThreadLocal is not propagated — you need `InheritableThreadLocal` or explicit context propagation (Reactor's context, `MDCAdapter`).
+
+---
+
+**Q9. What's the difference between overengineering and good design?**
+
+> Good design solves **actual problems that exist today** with the minimum necessary abstraction. Overengineering adds abstractions for hypothetical future requirements that may never materialize. The key test: "Does this abstraction have at least two distinct concrete implementations today that are actually used in different contexts?" If yes, the abstraction earns its complexity. If you're creating an interface with one implementation and no test mock, it's likely over-engineered. Apply the Rule of Three: abstract on the third repetition, not the first.
+
+---
+
+**Q10. How do circular dependencies manifest at the module level vs class level, and how does the resolution differ?**
+
+> Class-level: Spring's ApplicationContext throws `BeanCurrentlyInCreationException` at startup. Resolution: extract shared abstractions, use domain events, or restructure responsibilities. Module-level (Maven/Gradle multi-module): build system cannot determine compilation order and fails with dependency cycle error. Resolution: extract a `shared-domain` or `common-api` module containing interfaces, DTOs, and events that both modules depend on — they never depend on each other directly. Architecture tests (ArchUnit) should enforce cycle-freedom in CI to prevent regression.
+
+---
+
+**Q11. What is the "lapsed listener" problem and how do weak references help?**
+
+> Lapsed listener: an Observer is registered with a long-lived Subject. The observer's lifecycle ends (e.g., a UI component is destroyed) but it was never unregistered — the Subject holds a strong reference, preventing GC. Using `WeakReference<Observer>` in the subject's listener list allows the GC to collect the observer when no other strong references exist. The subject must check `weakRef.get() != null` before notifying and remove null entries. Downside: unpredictable removal timing. Better solution: explicit lifecycle management with `close()`/`dispose()` methods.
+
+---
+
+**Q12. How would you refactor a monolith to microservices without a big-bang rewrite?**
+
+> Strangler Fig pattern: (1) Identify one bounded context with clear boundaries (e.g., Notifications). (2) Extract it behind an interface in the monolith. (3) Implement that interface as a remote call to the new service. (4) Route traffic to the new service gradually, verifying correctness. (5) Remove the old code from the monolith. Repeat for each context. Key prerequisites: robust contract testing (Pact), distributed tracing, and circuit breakers before the first extraction. Anti-pattern: extracting shared DB tables into a service — services must own their data.
+
+---
+
+## 20. ADVANCED / SENIOR-LEVEL CONSIDERATIONS
+
+### Anti-Patterns in Distributed Systems
+```
+Shared DB between services     → tight data coupling, schema changes break all services
+Synchronous call chains        → A→B→C→D: cascading failures, latency multiplication
+No circuit breaker             → one slow service takes down all callers
+Chatty microservices           → N+1 problem at network level (API composition needed)
+Two-phase commit across services → distributed transactions: slow and fragile
+```
+
+### Design Patterns as Anti-Pattern Remedies
+```
+God Object          → SRP + Extract Class + Facade
+Spaghetti Code      → Guard Clauses + Extract Method + Command/Strategy
+Tight Coupling      → DI + Repository + Interface Segregation
+Shared Mutable State → Immutable Value Objects + Actor Model + Event Sourcing
+Thread Misuse       → ExecutorService + CompletableFuture + Virtual Threads
+Monolith            → Modular Monolith → Strangler Fig → Microservices
+```
+
+### JVM-Specific Considerations
+- **GC pressure from overengineering**: excessive object creation from over-use of Builder/Decorator for trivial objects in hot paths
+- **JIT deoptimization**: overly abstract code (excessive interface dispatch, reflection) can prevent JIT inline optimization
+- **ClassLoader leaks**: common in application servers — static references to classes loaded by child ClassLoader prevent undeployment
+- **String interning abuse**: `String.intern()` uses permgen/metaspace, can cause leak if used for arbitrary strings
+
+### Tooling for Detection
+```
+Static Analysis:   SonarQube, SpotBugs, PMD, Checkstyle
+Architecture:      ArchUnit (enforce layer rules, no cycles)
+Memory:            Eclipse MAT, VisualVM, async-profiler
+Concurrency:       ThreadSanitizer, BlockHound (reactive), jstack, jcmd
+Performance:       JMH (microbenchmarks), async-profiler, JFR (Java Flight Recorder)
+Code Coverage:     JaCoCo (exposes untestable God Objects)
+```
+
+---
+
+## 21. SUMMARY / CHEAT SHEET
+
+```
+OBJECT DESIGN ANTI-PATTERNS:
+├── God Object          → one class does everything → SRP violation → extract classes
+├── Spaghetti Code      → tangled flow → guard clauses, extract methods
+├── Overengineering     → YAGNI violated → simplify, Rule of Three
+└── Overloaded Ctors    → telescoping → use Builder pattern
+
+CONCURRENCY ANTI-PATTERNS:
+├── Shared Mutable State  → data races → immutability, ConcurrentCollections, Atomic*
+├── Improper Sync         → race/deadlock → consistent lock order, tryLock, CAS
+├── Thread Misuse         → unbounded threads → ExecutorService, Virtual Threads
+└── Blocking in Async     → starves event loop → subscribeOn(boundedElastic)
+
+RESOURCE / LIFECYCLE ANTI-PATTERNS:
+├── Memory Leaks          → lingering refs → WeakReference, cache eviction, unsubscribe
+├── Resource Leaks        → unclosed IO → try-with-resources, AutoCloseable
+└── Exception Swallowing  → silent failures → specific catch, translate, rethrow
+
+DEPENDENCY / ARCHITECTURE ANTI-PATTERNS:
+├── Tight Coupling        → concrete deps → interface + DI
+├── Static Abuse          → global state → instance with DI, ThreadLocal carefully
+├── Circular Dependencies → A→B→A → extract shared abstraction, domain events
+├── Overuse of Inheritance → fragile hierarchy → composition + delegation
+└── Monolithic Services   → all in one → Modular Monolith → Strangler Fig
+
+PERFORMANCE ANTI-PATTERNS:
+├── Premature Optimization → measure first → profile before optimizing
+└── Improper Caching       → unbounded/stale → Caffeine, TTL, eviction, stampede guard
+
+QUICK SMELL DETECTOR:
+"Manager" / "Helper" class doing everything  → God Object
+Nesting deeper than 3 levels                → Spaghetti Code
+Interface with one impl, no test mock       → Overengineering
+new Thread() in request handler             → Thread Misuse
+catch(Exception e) {}                       → Exception Swallowing
+static Map<K,V> as cache                    → Memory Leak + Static Abuse
+new ConcreteService() in constructor        → Tight Coupling
+ServiceA @Autowired in ServiceB, vice versa → Circular Dependency
+```
+
+# Java Best Practices — Senior Developer Study Notes
+
+---
+
+## Topic Overview
+
+Best practices are **proven conventions and techniques** that consistently produce maintainable, reliable, performant, and secure Java applications. Unlike anti-patterns (what to avoid), best practices define **what to do and why** — backed by years of collective industry experience.
+
+**Why this matters at senior level:**
+- Senior engineers set standards others follow
+- Code review quality depends on internalizing these principles
+- Architecture decisions compound — good early practices prevent expensive later rewrites
+- System reliability, security, and maintainability directly correlate with practice quality
+
+**Real-world impact:**
+- Netflix's chaos-resilient Java services rely on defensive programming and circuit breakers
+- Google's internal Java style guide enforces clean code at massive scale
+- Spring Framework's design embodies immutability, DI, and clean API design
+- OWASP's Java security guide directly maps to secure coding practices
+
+---
+
+## Core Philosophy
+
+```
+Correct → Clear → Simple → Fast  (in that order of priority)
+
+"Any fool can write code a computer can understand.
+ Good programmers write code humans can understand." — Martin Fowler
+
+"Make it work, make it right, make it fast." — Kent Beck
+```
+
+---
+
+## 1. CLEAN CODE PRINCIPLES
+
+**Definition:** Code that is **easy to read, understand, change, and test** — self-documenting, minimal, and expressive.
+
+### Naming
+
+```java
+// ❌ Cryptic abbreviations and meaningless names
+int d;           // days? data? distance?
+List<Object> lst;
+void proc(Map m) { ... }
+boolean flag2 = true;
+
+// ✅ Intention-revealing names
+int elapsedDays;
+List<Customer> activeCustomers;
+void processOrderRefund(Map<String, BigDecimal> refundItems) { ... }
+boolean isEligibleForDiscount = true;
+```
+
+```java
+// ❌ Inconsistent naming conventions
+public class user_account { ... }     // should be PascalCase
+private String UserName;              // should be camelCase
+public static final int max = 100;   // constant should be UPPER_SNAKE_CASE
+void GetOrder() { ... }              // should be camelCase
+
+// ✅ Java naming conventions strictly followed
+public class UserAccount { ... }             // class: PascalCase
+private String userName;                     // field: camelCase
+public static final int MAX_RETRIES = 3;    // constant: UPPER_SNAKE_CASE
+Order getOrderById(Long orderId) { ... }    // method: camelCase verb/noun
+```
+
+### Method Design
+
+```java
+// ❌ Method doing too much — violates SRP, hard to test
+public void handleUser(User user) {
+    // validates, saves, sends email, logs, updates cache — all in one
+    if (user.getEmail() == null) throw new RuntimeException("No email");
+    if (user.getAge() < 18) throw new RuntimeException("Too young");
+    userRepository.save(user);
+    emailService.sendWelcome(user.getEmail());
+    cache.put(user.getId(), user);
+    logger.info("User created: " + user.getId());
+    auditLog.write("USER_CREATED", user);
+}
+
+// ✅ Each method does ONE thing, at ONE level of abstraction
+public User registerUser(UserRegistrationRequest request) {
+    validateRegistrationRequest(request);        // one concern
+    User user = createUserFromRequest(request);  // one concern
+    User saved = userRepository.save(user);      // one concern
+    publishUserRegisteredEvent(saved);           // one concern
+    return saved;
+}
+
+private void validateRegistrationRequest(UserRegistrationRequest request) {
+    Objects.requireNonNull(request.getEmail(), "Email is required");
+    if (request.getAge() < 18) throw new UnderageRegistrationException(request.getAge());
+}
+
+private void publishUserRegisteredEvent(User user) {
+    eventPublisher.publishEvent(new UserRegisteredEvent(user.getId(), user.getEmail()));
+}
+```
+
+### Single Level of Abstraction (SLAP)
+
+```java
+// ❌ Mixed abstraction levels — high-level steps mixed with low-level details
+public void processCheckout(Cart cart) {
+    // high level
+    validateCart(cart);
+
+    // low level leaking in
+    BigDecimal total = BigDecimal.ZERO;
+    for (CartItem item : cart.getItems()) {
+        total = total.add(item.getPrice().multiply(BigDecimal.valueOf(item.getQty())));
+    }
+
+    // high level
+    chargePayment(cart.getUser(), total);
+
+    // low level leaking in
+    PreparedStatement ps = conn.prepareStatement(
+        "UPDATE inventory SET qty = qty - ? WHERE product_id = ?");
+    // ...
+}
+
+// ✅ Consistent abstraction level — orchestration only at this layer
+public void processCheckout(Cart cart) {
+    validateCart(cart);                            // all high-level
+    BigDecimal total = calculateCartTotal(cart);   // delegate detail
+    chargePayment(cart.getUser(), total);
+    updateInventory(cart.getItems());
+    sendOrderConfirmation(cart);
+}
+```
+
+### Magic Numbers and Strings
+
+```java
+// ❌ Magic numbers — what do these mean?
+if (user.getAge() >= 18 && user.getScore() > 750) {
+    Thread.sleep(5000);
+    retry(3);
+}
+
+// ✅ Named constants
+private static final int MINIMUM_LEGAL_AGE = 18;
+private static final int PREMIUM_CREDIT_SCORE_THRESHOLD = 750;
+private static final long RETRY_DELAY_MS = 5_000L;
+private static final int MAX_RETRY_ATTEMPTS = 3;
+
+if (user.getAge() >= MINIMUM_LEGAL_AGE
+        && user.getScore() > PREMIUM_CREDIT_SCORE_THRESHOLD) {
+    Thread.sleep(RETRY_DELAY_MS);
+    retry(MAX_RETRY_ATTEMPTS);
+}
+```
+
+### Boolean Expressions
+
+```java
+// ❌ Complex conditions inline
+if (!user.isDeleted() && user.getStatus() == 1
+        && (user.getRole().equals("ADMIN") || user.getPermissions().contains("WRITE"))
+        && user.getLastLogin().isAfter(LocalDate.now().minusDays(30))) {
+    // what does this check?
+}
+
+// ✅ Extract predicate methods with meaningful names
+if (isActiveUserWithWriteAccess(user) && hasLoggedInRecently(user)) {
+    // immediately clear what this means
+}
+
+private boolean isActiveUserWithWriteAccess(User user) {
+    return !user.isDeleted()
+        && user.isActive()
+        && (user.isAdmin() || user.hasPermission("WRITE"));
+}
+
+private boolean hasLoggedInRecently(User user) {
+    return user.getLastLogin().isAfter(LocalDate.now().minusDays(30));
+}
+```
+
+---
+
+## 2. DEFENSIVE PROGRAMMING
+
+**Definition:** Writing code that **anticipates failures, validates assumptions, and fails fast** with clear errors rather than producing silent incorrect results.
+
+### Input Validation
+
+```java
+// ✅ Validate at every public method boundary
+public class PaymentService {
+
+    public Receipt processPayment(PaymentRequest request) {
+        // Validate early — fail fast with meaningful messages
+        Objects.requireNonNull(request, "PaymentRequest must not be null");
+        Objects.requireNonNull(request.getUserId(), "UserId is required");
+        Objects.requireNonNull(request.getAmount(), "Amount is required");
+
+        if (request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException(
+                "Payment amount must be positive, got: " + request.getAmount());
+        }
+
+        if (request.getAmount().compareTo(MAX_PAYMENT_AMOUNT) > 0) {
+            throw new PaymentLimitExceededException(
+                request.getAmount(), MAX_PAYMENT_AMOUNT);
+        }
+
+        if (!SUPPORTED_CURRENCIES.contains(request.getCurrency())) {
+            throw new UnsupportedCurrencyException(request.getCurrency());
+        }
+
+        return executePayment(request); // only execute after all validation passes
+    }
+}
+```
+
+### Preconditions with Guava / Custom Guards
+
+```java
+// Using Guava's Preconditions
+import static com.google.common.base.Preconditions.*;
+
+public void transfer(Account from, Account to, BigDecimal amount) {
+    checkNotNull(from, "Source account must not be null");
+    checkNotNull(to, "Target account must not be null");
+    checkNotNull(amount, "Transfer amount must not be null");
+    checkArgument(amount.signum() > 0, "Amount must be positive: %s", amount);
+    checkArgument(!from.equals(to), "Cannot transfer to same account");
+    checkState(from.isActive(), "Source account %s is not active", from.getId());
+
+    // proceed with transfer
+}
+
+// Custom guard utility for domain validation
+public final class Guard {
+    private Guard() {}
+
+    public static <T> T requireNonNull(T value, String fieldName) {
+        if (value == null)
+            throw new DomainValidationException(fieldName + " must not be null");
+        return value;
+    }
+
+    public static String requireNonBlank(String value, String fieldName) {
+        if (value == null || value.isBlank())
+            throw new DomainValidationException(fieldName + " must not be blank");
+        return value;
+    }
+
+    public static BigDecimal requirePositive(BigDecimal value, String fieldName) {
+        requireNonNull(value, fieldName);
+        if (value.signum() <= 0)
+            throw new DomainValidationException(fieldName + " must be positive: " + value);
+        return value;
+    }
+}
+```
+
+### Assertions for Internal Invariants
+
+```java
+// assert for internal developer contracts (disabled in production by default)
+// Enable with JVM flag: -ea (not for user input validation)
+private BigDecimal calculateDiscount(BigDecimal price, int loyaltyYears) {
+    assert price != null : "price should not be null — caller bug";
+    assert loyaltyYears >= 0 : "loyaltyYears negative — logic error: " + loyaltyYears;
+
+    // assert that invariants hold after computation
+    BigDecimal discount = price.multiply(BigDecimal.valueOf(loyaltyYears * 0.01));
+    assert discount.compareTo(price) <= 0 : "Discount cannot exceed price — algorithm bug";
+
+    return discount;
+}
+```
+
+### Defensive Copies
+
+```java
+// ❌ Returning internal mutable state — callers can corrupt it
+public class Order {
+    private List<OrderItem> items = new ArrayList<>();
+    private Date createdAt;
+
+    public List<OrderItem> getItems() { return items; }       // caller can clear/add
+    public Date getCreatedAt() { return createdAt; }          // Date is mutable!
+}
+
+// ✅ Return defensive copies
+public class Order {
+    private final List<OrderItem> items;
+    private final Instant createdAt;     // Instant is immutable — no copy needed
+
+    public List<OrderItem> getItems() {
+        return Collections.unmodifiableList(items); // or List.copyOf(items)
+    }
+
+    public Instant getCreatedAt() { return createdAt; } // safe — Instant is immutable
+
+    // Defensive copy in constructor
+    public Order(List<OrderItem> items, Instant createdAt) {
+        this.items = new ArrayList<>(items); // copy input — don't trust caller
+        this.createdAt = createdAt;
+    }
+}
+```
+
+---
+
+## 3. IMMUTABILITY DESIGN
+
+**Definition:** Objects whose **state cannot be modified after construction** — thread-safe by design, easier to reason about, cache-friendly.
+
+### Designing Immutable Classes
+
+```java
+// ✅ Fully immutable value object
+public final class Money {           // final — prevents subclass mutability
+    private final BigDecimal amount; // final — prevents reassignment
+    private final Currency currency; // final
+
+    public Money(BigDecimal amount, Currency currency) {
+        // defensive copy + validation in constructor
+        Objects.requireNonNull(amount, "Amount required");
+        Objects.requireNonNull(currency, "Currency required");
+        if (amount.scale() > 2) throw new IllegalArgumentException("Max 2 decimal places");
+
+        this.amount = amount.setScale(2, RoundingMode.HALF_UP); // normalize
+        this.currency = currency;
+    }
+
+    // No setters — ever
+    public BigDecimal getAmount() { return amount; } // BigDecimal is immutable
+    public Currency getCurrency() { return currency; }
+
+    // Return new instances for "modification" operations
+    public Money add(Money other) {
+        requireSameCurrency(other);
+        return new Money(this.amount.add(other.amount), this.currency);
+    }
+
+    public Money multiply(int factor) {
+        return new Money(this.amount.multiply(BigDecimal.valueOf(factor)), this.currency);
+    }
+
+    public Money withCurrency(Currency newCurrency, BigDecimal exchangeRate) {
+        return new Money(this.amount.multiply(exchangeRate), newCurrency);
+    }
+
+    private void requireSameCurrency(Money other) {
+        if (!this.currency.equals(other.currency)) {
+            throw new CurrencyMismatchException(this.currency, other.currency);
+        }
+    }
+
+    @Override
+    public boolean equals(Object o) {  // value equality
+        if (this == o) return true;
+        if (!(o instanceof Money)) return false;
+        Money money = (Money) o;
+        return amount.compareTo(money.amount) == 0 // use compareTo for BigDecimal
+            && currency.equals(money.currency);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(amount.stripTrailingZeros(), currency);
+    }
+
+    @Override
+    public String toString() {
+        return amount + " " + currency.getCurrencyCode();
+    }
+}
+```
+
+### Java Records (Java 16+) — Immutability Made Easy
+
+```java
+// Compact immutable value object with auto-generated equals/hashCode/toString
+public record Address(
+    String street,
+    String city,
+    String country,
+    String postalCode
+) {
+    // Compact constructor for validation
+    public Address {
+        Objects.requireNonNull(street, "Street required");
+        Objects.requireNonNull(city, "City required");
+        Objects.requireNonNull(country, "Country required");
+        country = country.toUpperCase(); // normalization in compact constructor
+    }
+
+    // Custom method — records can have methods
+    public String fullAddress() {
+        return street + ", " + city + ", " + postalCode + ", " + country;
+    }
+}
+
+// Usage — concise, safe, thread-safe
+Address address = new Address("123 Main St", "Springfield", "us", "12345");
+// address.street() — accessor (not getStreet())
+```
+
+### Immutable Collections
+
+```java
+// ✅ Prefer immutable collections
+// Java 9+ factory methods — truly unmodifiable
+List<String> statuses = List.of("PENDING", "CONFIRMED", "SHIPPED", "DELIVERED");
+Set<String> validCurrencies = Set.of("USD", "EUR", "GBP", "JPY");
+Map<String, Integer> httpCodes = Map.of("OK", 200, "NOT_FOUND", 404, "ERROR", 500);
+
+// Copy to immutable — important when receiving mutable collections
+public class OrderConfig {
+    private final List<String> allowedPaymentMethods;
+
+    public OrderConfig(List<String> methods) {
+        // Copy AND make unmodifiable — defend against caller mutation
+        this.allowedPaymentMethods = List.copyOf(methods); // Java 10+
+    }
+
+    public List<String> getAllowedPaymentMethods() {
+        return allowedPaymentMethods; // safe to return — unmodifiable
+    }
+}
+
+// Guava immutable collections (more feature-rich)
+ImmutableMap<String, Integer> priorityMap = ImmutableMap.<String, Integer>builder()
+    .put("CRITICAL", 1)
+    .put("HIGH", 2)
+    .put("MEDIUM", 3)
+    .put("LOW", 4)
+    .build();
+```
+
+### Immutability in Concurrency
+
+```java
+// ✅ Immutable objects need no synchronization — publish safely
+public class ServerConfig {
+    private final String host;
+    private final int port;
+    private final Duration timeout;
+    private final int maxConnections;
+
+    // This object can be safely published to any number of threads
+    // No volatile, no synchronized needed — immutability guarantees visibility
+    public ServerConfig(String host, int port, Duration timeout, int maxConnections) {
+        this.host = host;
+        this.port = port;
+        this.timeout = timeout;
+        this.maxConnections = maxConnections;
+    }
+    // getters only — no setters
+}
+
+// Volatile reference for safe config hot-reload (reference swap, not mutation)
+private volatile ServerConfig currentConfig;
+
+public void reloadConfig() {
+    ServerConfig newConfig = loadConfigFromFile(); // build new immutable object
+    currentConfig = newConfig;  // atomic reference swap — safe with volatile
+    // Old config still safe for any thread currently using it
+}
+```
+
+---
+
+## 4. EXCEPTION HANDLING BEST PRACTICES
+
+### Exception Hierarchy Design
+
+```java
+// ✅ Domain-specific exception hierarchy
+public class AppException extends RuntimeException {
+    private final ErrorCode errorCode;
+
+    public AppException(ErrorCode errorCode, String message) {
+        super(message);
+        this.errorCode = errorCode;
+    }
+
+    public AppException(ErrorCode errorCode, String message, Throwable cause) {
+        super(message, cause);    // ALWAYS preserve cause chain
+        this.errorCode = errorCode;
+    }
+
+    public ErrorCode getErrorCode() { return errorCode; }
+}
+
+// Specific exceptions extend base
+public class OrderNotFoundException extends AppException {
+    private final Long orderId;
+
+    public OrderNotFoundException(Long orderId) {
+        super(ErrorCode.ORDER_NOT_FOUND, "Order not found: " + orderId);
+        this.orderId = orderId;
+    }
+
+    public Long getOrderId() { return orderId; }
+}
+
+public class PaymentDeclinedException extends AppException {
+    private final String declineReason;
+
+    public PaymentDeclinedException(String reason, Throwable cause) {
+        super(ErrorCode.PAYMENT_DECLINED, "Payment declined: " + reason, cause);
+        this.declineReason = reason;
+    }
+}
+
+public enum ErrorCode {
+    ORDER_NOT_FOUND, PAYMENT_DECLINED, INSUFFICIENT_INVENTORY,
+    VALIDATION_ERROR, EXTERNAL_SERVICE_ERROR
+}
+```
+
+### Checked vs Unchecked — Decision Framework
+
+```java
+// ✅ Use CHECKED exceptions for: recoverable conditions callers MUST handle
+public interface FileStorage {
+    // Caller MUST decide: retry, use default, fail? Force them to consider it.
+    byte[] read(String path) throws FileNotFoundException, StorageUnavailableException;
+}
+
+// ✅ Use UNCHECKED for: programming errors, unrecoverable conditions
+public void setMaxConnections(int max) {
+    if (max <= 0) throw new IllegalArgumentException("Max connections must be > 0: " + max);
+    // IllegalArgumentException — programming error, caller shouldn't catch this
+}
+
+// ✅ Modern practice: prefer unchecked, document thoroughly
+// Checked exceptions spread throughout call stacks and pollute interfaces
+// Prefer: document with @throws Javadoc, handle at boundaries (controller/entry point)
+```
+
+### Exception Handling Patterns
+
+```java
+// ✅ Centralized exception handling in Spring
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(OrderNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleOrderNotFound(OrderNotFoundException ex) {
+        log.warn("Order not found: orderId={}", ex.getOrderId());
+        return ResponseEntity
+            .status(HttpStatus.NOT_FOUND)
+            .body(new ErrorResponse(ex.getErrorCode(), ex.getMessage()));
+    }
+
+    @ExceptionHandler(PaymentDeclinedException.class)
+    public ResponseEntity<ErrorResponse> handlePaymentDeclined(PaymentDeclinedException ex) {
+        log.warn("Payment declined: {}", ex.getMessage());
+        return ResponseEntity
+            .status(HttpStatus.PAYMENT_REQUIRED)
+            .body(new ErrorResponse(ex.getErrorCode(), ex.getMessage()));
+    }
+
+    @ExceptionHandler(Exception.class) // catch-all — last resort
+    public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex) {
+        log.error("Unexpected error", ex); // full stack trace for unexpected
+        return ResponseEntity
+            .status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body(new ErrorResponse(ErrorCode.INTERNAL_ERROR, "An unexpected error occurred"));
+            // Never expose internal details to the client
+    }
+}
+```
+
+```java
+// ✅ Exception translation at layer boundaries
+@Repository
+public class JpaOrderRepository implements OrderRepository {
+    public Order findById(Long id) {
+        try {
+            return em.find(Order.class, id);
+        } catch (JpaSystemException ex) {
+            // Translate JPA-specific exception to domain exception
+            // Service layer should not know about JPA
+            throw new RepositoryException("Failed to load order: " + id, ex);
+        }
+    }
+}
+
+// ✅ Try-with-resources for all AutoCloseable resources
+public Optional<User> findUserByEmail(String email) {
+    try (Connection conn = dataSource.getConnection();
+         PreparedStatement ps = conn.prepareStatement(
+             "SELECT * FROM users WHERE email = ?")) {
+        ps.setString(1, email);
+        try (ResultSet rs = ps.executeQuery()) {
+            return rs.next() ? Optional.of(mapUser(rs)) : Optional.empty();
+        }
+    } catch (SQLException ex) {
+        throw new RepositoryException("Failed to find user by email", ex);
+    }
+}
+```
+
+### Result Type Pattern (functional alternative)
+
+```java
+// ✅ Result/Either type — explicit success/failure without exceptions
+public sealed interface Result<T> permits Result.Success, Result.Failure {
+
+    record Success<T>(T value) implements Result<T> {}
+    record Failure<T>(String errorCode, String message, Exception cause) implements Result<T> {}
+
+    static <T> Result<T> success(T value) { return new Success<>(value); }
+    static <T> Result<T> failure(String code, String msg) {
+        return new Failure<>(code, msg, null);
+    }
+    static <T> Result<T> failure(String code, String msg, Exception cause) {
+        return new Failure<>(code, msg, cause);
+    }
+
+    default boolean isSuccess() { return this instanceof Success; }
+
+    default T getOrThrow() {
+        return switch (this) {
+            case Success<T> s -> s.value();
+            case Failure<T> f -> throw new AppException(f.errorCode(), f.message());
+        };
+    }
+}
+
+// Usage
+public Result<Order> placeOrder(OrderRequest request) {
+    if (!inventory.isAvailable(request.getProductId())) {
+        return Result.failure("INSUFFICIENT_INVENTORY", "Product not available");
+    }
+    try {
+        Order order = orderRepository.save(buildOrder(request));
+        return Result.success(order);
+    } catch (Exception ex) {
+        return Result.failure("ORDER_SAVE_FAILED", "Failed to save order", ex);
+    }
+}
+
+// Caller makes explicit decision
+Result<Order> result = orderService.placeOrder(request);
+if (result.isSuccess()) {
+    return ResponseEntity.ok(((Result.Success<Order>) result).value());
+} else {
+    Result.Failure<Order> failure = (Result.Failure<Order>) result;
+    return ResponseEntity.badRequest().body(failure.message());
+}
+```
+
+---
+
+## 5. LOGGING BEST PRACTICES
+
+### Structured Logging
+
+```java
+// ❌ String concatenation — performance hit even when log level disabled,
+//    unstructured, hard to parse in log aggregators
+logger.debug("Processing order " + orderId + " for user " + userId +
+             " with total " + total);
+
+// ✅ Parameterized logging — lazy evaluation, structured
+// SLF4J with Logback or Log4j2
+private static final Logger log = LoggerFactory.getLogger(OrderService.class);
+
+log.debug("Processing order: orderId={}, userId={}, total={}", orderId, userId, total);
+
+// ✅ Structured JSON logging with MDC for correlation
+import org.slf4j.MDC;
+
+public class RequestLoggingFilter implements Filter {
+    public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain)
+            throws IOException, ServletException {
+        String traceId = UUID.randomUUID().toString();
+        MDC.put("traceId", traceId);
+        MDC.put("userId", resolveUserId(req));
+        MDC.put("endpoint", ((HttpServletRequest) req).getRequestURI());
+        try {
+            chain.doFilter(req, res);
+        } finally {
+            MDC.clear(); // ALWAYS clear in finally — thread pool reuse
+        }
+    }
+}
+
+// Every log statement in the request now automatically includes traceId, userId
+// In logback.xml: %X{traceId} %X{userId} in pattern
+// In JSON layout: MDC fields become top-level JSON fields
+// Parseable by ELK, Splunk, Datadog without regex extraction
+```
+
+### Log Level Strategy
+
+```java
+// ✅ Log level discipline
+public class PaymentProcessor {
+
+    public Receipt process(PaymentRequest request) {
+        // TRACE — highly detailed, for debugging specific flows (never in prod normally)
+        log.trace("Starting payment processing: request={}", request);
+
+        // DEBUG — developer-relevant detail (enabled in staging, off in prod)
+        log.debug("Resolved payment gateway: gateway={}, userId={}", gateway, request.getUserId());
+
+        PaymentResult result = gateway.charge(request);
+
+        // INFO — significant business events (always on)
+        log.info("Payment processed: orderId={}, amount={}, status={}",
+            request.getOrderId(), request.getAmount(), result.getStatus());
+
+        if (result.hasWarnings()) {
+            // WARN — unexpected but handled situation
+            log.warn("Payment processed with warnings: orderId={}, warnings={}",
+                request.getOrderId(), result.getWarnings());
+        }
+
+        return result.toReceipt();
+    }
+
+    public Receipt processWithFallback(PaymentRequest request) {
+        try {
+            return process(request);
+        } catch (GatewayTimeoutException ex) {
+            // WARN — recoverable, handled, not a bug
+            log.warn("Primary gateway timeout, trying fallback: orderId={}",
+                request.getOrderId(), ex);
+            return fallbackGateway.charge(request);
+        } catch (PaymentException ex) {
+            // ERROR — operation failed, needs attention (but app keeps running)
+            log.error("Payment failed: orderId={}, reason={}",
+                request.getOrderId(), ex.getReason(), ex); // pass exception as last arg
+            throw ex;
+        }
+        // FATAL (via log.error with alert trigger) — app cannot continue, e.g., DB unreachable
+    }
+}
+```
+
+### What NOT to Log
+
+```java
+// ❌ NEVER log sensitive data — PCI-DSS, GDPR, HIPAA violations
+log.info("Processing payment for card: {}", creditCardNumber);    // PCI violation
+log.debug("User credentials: username={}, password={}", u, pass); // security breach
+log.info("Patient data: {}", patientRecord);                       // HIPAA violation
+
+// ✅ Log identifiers and non-sensitive metadata
+log.info("Processing payment: maskedCard={}, userId={}, orderId={}",
+    maskCard(creditCardNumber), userId, orderId);
+
+private String maskCard(String cardNumber) {
+    return "****-****-****-" + cardNumber.substring(cardNumber.length() - 4);
+}
+
+// ✅ Override toString() to exclude sensitive fields
+public class UserCredentials {
+    private String username;
+    private String password;
+
+    @Override
+    public String toString() {
+        return "UserCredentials{username=" + username + ", password=[PROTECTED]}";
+    }
+}
+```
+
+### Performance-Safe Logging
+
+```java
+// ❌ Expensive computation always performed even if DEBUG is disabled
+log.debug("Order summary: " + buildExpensiveOrderSummary(order)); // always called
+
+// ✅ Guard expensive computations
+if (log.isDebugEnabled()) {
+    log.debug("Order summary: {}", buildExpensiveOrderSummary(order));
+}
+
+// ✅ Lambda-based lazy evaluation (Log4j2 / SLF4J 2.x)
+log.debug("Order summary: {}", () -> buildExpensiveOrderSummary(order));
+// Lambda only executed if DEBUG is enabled
+```
+
+---
+
+## 6. CONCURRENCY BEST PRACTICES
+
+### Prefer Higher-Level Abstractions
+
+```java
+// ✅ CompletableFuture for async orchestration
+public CompletableFuture<OrderSummary> buildOrderSummary(Long orderId) {
+    CompletableFuture<Order> orderFuture =
+        CompletableFuture.supplyAsync(() -> orderRepo.findById(orderId), ioExecutor);
+
+    CompletableFuture<User> userFuture =
+        orderFuture.thenComposeAsync(
+            order -> CompletableFuture.supplyAsync(
+                () -> userRepo.findById(order.getUserId()), ioExecutor));
+
+    CompletableFuture<List<Product>> productsFuture =
+        orderFuture.thenComposeAsync(
+            order -> CompletableFuture.supplyAsync(
+                () -> productRepo.findAllById(order.getProductIds()), ioExecutor));
+
+    // Wait for user and products concurrently — parallel IO
+    return orderFuture.thenCombineAsync(
+        userFuture.thenCombine(productsFuture,
+            (user, products) -> new UserProductContext(user, products)),
+        (order, ctx) -> new OrderSummary(order, ctx.user(), ctx.products()),
+        computeExecutor);
+}
+
+// ✅ Virtual Threads (Java 21) — simplest for IO-bound concurrency
+try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    List<Future<Product>> futures = productIds.stream()
+        .map(id -> executor.submit(() -> productService.fetchFromRemote(id)))
+        .collect(Collectors.toList());
+
+    List<Product> products = futures.stream()
+        .map(f -> {
+            try { return f.get(); }
+            catch (Exception e) { throw new RuntimeException(e); }
+        })
+        .collect(Collectors.toList());
+}
+```
+
+### Concurrent Data Structure Selection
+
+```java
+// ✅ Choose the right concurrent collection for the use case
+
+// High-read, low-write (config, routing tables)
+private final CopyOnWriteArrayList<RouteHandler> handlers = new CopyOnWriteArrayList<>();
+
+// General-purpose concurrent map (better than Hashtable/synchronizedMap)
+private final ConcurrentHashMap<String, Session> sessions = new ConcurrentHashMap<>();
+
+// Atomic operations on ConcurrentHashMap
+sessions.computeIfAbsent(sessionId, id -> createNewSession(id));
+sessions.compute(userId, (id, existing) ->
+    existing == null ? new Counter(1) : existing.increment());
+
+// Producer-consumer queue
+private final BlockingQueue<Task> taskQueue = new LinkedBlockingQueue<>(10_000);
+// Bounded queue — backpressure when full (important for flow control)
+
+// Producer
+taskQueue.offer(task, 100, TimeUnit.MILLISECONDS); // timeout — don't block forever
+
+// Consumer
+Task task = taskQueue.poll(500, TimeUnit.MILLISECONDS);
+if (task != null) process(task);
+
+// Thread-safe counter without locks
+private final AtomicLong requestCount = new AtomicLong(0);
+private final AtomicReference<Config> currentConfig = new AtomicReference<>();
+
+// LongAdder — better than AtomicLong under high contention (multiple cells)
+private final LongAdder hitCount = new LongAdder();
+hitCount.increment(); // less contention than AtomicLong.incrementAndGet()
+long total = hitCount.sum();
+```
+
+### Lock Best Practices
+
+```java
+// ✅ Always use try-finally with explicit locks
+private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+private final Lock readLock = rwLock.readLock();
+private final Lock writeLock = rwLock.writeLock();
+private Map<String, CacheEntry> cache = new HashMap<>();
+
+public Optional<CacheEntry> get(String key) {
+    readLock.lock();  // multiple readers allowed concurrently
+    try {
+        return Optional.ofNullable(cache.get(key));
+    } finally {
+        readLock.unlock(); // ALWAYS in finally
+    }
+}
+
+public void put(String key, CacheEntry entry) {
+    writeLock.lock();  // exclusive write access
+    try {
+        cache.put(key, entry);
+    } finally {
+        writeLock.unlock();
+    }
+}
+
+// ✅ Lock ordering — always acquire in the same order to prevent deadlock
+// Use a canonical ordering (e.g., by ID) when multiple locks needed
+public void transfer(Account from, Account to, BigDecimal amount) {
+    Account first  = from.getId() < to.getId() ? from : to;
+    Account second = from.getId() < to.getId() ? to : from;
+
+    synchronized (first) {
+        synchronized (second) {
+            from.debit(amount);
+            to.credit(amount);
+        }
+    }
+}
+```
+
+### Thread Safety Annotations
+
+```java
+// ✅ Document thread-safety contracts with annotations
+// (javax.annotation.concurrent or custom)
+@ThreadSafe
+public class OrderCounter {
+    @GuardedBy("this")
+    private int count = 0;
+
+    public synchronized void increment() { count++; }
+    public synchronized int getCount() { return count; }
+}
+
+@NotThreadSafe
+public class QueryBuilder {
+    // Not thread-safe by design — document it explicitly
+    private StringBuilder query = new StringBuilder();
+    public QueryBuilder where(String condition) { ... }
+}
+
+@Immutable
+public record ProductId(Long value) {
+    public ProductId {
+        Objects.requireNonNull(value);
+        if (value <= 0) throw new IllegalArgumentException("Invalid product ID: " + value);
+    }
+}
+```
+
+---
+
+## 7. RESOURCE MANAGEMENT
+
+### Try-with-Resources — Always
+
+```java
+// ✅ All AutoCloseable resources managed by try-with-resources
+public List<OrderRecord> loadOrders(LocalDate from, LocalDate to) {
+    String sql = "SELECT * FROM orders WHERE created_at BETWEEN ? AND ?";
+
+    try (Connection conn = dataSource.getConnection();
+         PreparedStatement ps = conn.prepareStatement(sql)) {
+
+        ps.setObject(1, from);
+        ps.setObject(2, to);
+
+        try (ResultSet rs = ps.executeQuery()) {
+            List<OrderRecord> results = new ArrayList<>();
+            while (rs.next()) {
+                results.add(mapOrderRecord(rs));
+            }
+            return results;
+        }
+        // rs closed here even if exception occurs
+    } catch (SQLException ex) {
+        throw new DataAccessException("Failed to load orders", ex);
+    }
+    // conn and ps closed here even if exception occurs
+}
+
+// ✅ Custom AutoCloseable for domain resources
+public class DistributedLock implements AutoCloseable {
+    private final String lockKey;
+    private final RedissonClient redisson;
+    private final RLock lock;
+
+    public DistributedLock(String lockKey, RedissonClient redisson) {
+        this.lockKey = lockKey;
+        this.redisson = redisson;
+        this.lock = redisson.getLock(lockKey);
+        if (!lock.tryLock()) throw new LockAcquisitionException(lockKey);
+    }
+
+    @Override
+    public void close() {
+        if (lock.isHeldByCurrentThread()) {
+            lock.unlock();
+        }
+    }
+}
+
+// Usage
+try (DistributedLock lock = new DistributedLock("order:" + orderId, redisson)) {
+    processOrder(orderId);
+} // lock always released
+```
+
+### ExecutorService Lifecycle
+
+```java
+// ✅ Proper ExecutorService lifecycle management
+public class AsyncOrderProcessor implements AutoCloseable {
+    private final ExecutorService executor;
+
+    public AsyncOrderProcessor(int threadCount) {
+        this.executor = Executors.newFixedThreadPool(threadCount,
+            new ThreadFactoryBuilder()
+                .setNameFormat("order-processor-%d")  // name threads for debugging
+                .setDaemon(false)                       // non-daemon: JVM waits for completion
+                .setUncaughtExceptionHandler((t, ex) ->
+                    log.error("Uncaught exception in thread: {}", t.getName(), ex))
+                .build());
+    }
+
+    public Future<Receipt> submitOrder(Order order) {
+        return executor.submit(() -> processOrder(order));
+    }
+
+    @Override
+    public void close() {
+        executor.shutdown(); // stop accepting new tasks
+        try {
+            if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                executor.shutdownNow();   // interrupt running tasks
+                if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                    log.error("Executor did not terminate cleanly");
+                }
+            }
+        } catch (InterruptedException ex) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt(); // restore interrupt status
+        }
+    }
+}
+
+// Usage
+try (AsyncOrderProcessor processor = new AsyncOrderProcessor(10)) {
+    List<Future<Receipt>> futures = orders.stream()
+        .map(processor::submitOrder)
+        .collect(Collectors.toList());
+    // collect results...
+}
+```
+
+### Connection Pool Configuration
+
+```java
+// ✅ HikariCP — production-grade connection pool configuration
+@Configuration
+public class DatabaseConfig {
+
+    @Bean
+    @ConfigurationProperties("spring.datasource.hikari")
+    public HikariConfig hikariConfig() {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:postgresql://localhost:5432/orders");
+        config.setMaximumPoolSize(20);      // size for your workload
+        config.setMinimumIdle(5);           // keep connections warm
+        config.setConnectionTimeout(3000);  // fail fast: 3s to get connection
+        config.setIdleTimeout(600_000);     // 10min idle before close
+        config.setMaxLifetime(1800_000);    // 30min max — avoids stale connections
+        config.setKeepaliveTime(60_000);    // ping DB to keep connections alive
+        config.setPoolName("OrderDB-Pool"); // named for JMX monitoring
+        config.setLeakDetectionThreshold(5000); // warn if connection held >5s
+        return config;
+    }
+
+    @Bean
+    public DataSource dataSource(HikariConfig config) {
+        return new HikariDataSource(config);
+    }
+}
+```
+
+---
+
+## 8. DEPENDENCY MANAGEMENT
+
+### Dependency Injection Patterns
+
+```java
+// ✅ Constructor injection — preferred, enables immutability, explicit contracts
+@Service
+public class OrderService {
+    private final OrderRepository orderRepository;
+    private final PaymentService paymentService;
+    private final EventPublisher eventPublisher;
+    private final OrderValidator validator;
+
+    // Spring 4.3+: @Autowired not needed for single constructor
+    public OrderService(OrderRepository orderRepository,
+                        PaymentService paymentService,
+                        EventPublisher eventPublisher,
+                        OrderValidator validator) {
+        this.orderRepository = Objects.requireNonNull(orderRepository);
+        this.paymentService = Objects.requireNonNull(paymentService);
+        this.eventPublisher = Objects.requireNonNull(eventPublisher);
+        this.validator = Objects.requireNonNull(validator);
+    }
+}
+
+// ✅ Configuration via @ConfigurationProperties — type-safe, validated
+@ConfigurationProperties(prefix = "payment")
+@Validated
+public class PaymentProperties {
+    @NotBlank
+    private String gatewayUrl;
+
+    @Min(1) @Max(60)
+    private int timeoutSeconds = 30;
+
+    @DecimalMin("0.0") @DecimalMax("1.0")
+    private BigDecimal feeRate;
+
+    @NotNull
+    private RetryProperties retry;
+
+    // getters, setters (or use @ConstructorBinding for immutable)
+}
+```
+
+### Managing External Dependencies
+
+```java
+// ✅ Interface-based external service abstraction — decouple from vendor
+public interface PaymentGateway {
+    PaymentResult charge(PaymentRequest request);
+    RefundResult refund(String transactionId, BigDecimal amount);
+    PaymentStatus getStatus(String transactionId);
+}
+
+// Stripe implementation
+@Component
+@ConditionalOnProperty(name = "payment.gateway", havingValue = "stripe")
+public class StripePaymentGateway implements PaymentGateway {
+    public PaymentResult charge(PaymentRequest request) {
+        // Stripe-specific implementation
+    }
+}
+
+// PayPal implementation — swap by changing config
+@Component
+@ConditionalOnProperty(name = "payment.gateway", havingValue = "paypal")
+public class PayPalPaymentGateway implements PaymentGateway {
+    public PaymentResult charge(PaymentRequest request) {
+        // PayPal-specific implementation
+    }
+}
+
+// OrderService never changes when switching gateways
+```
+
+### Dependency Version Management (Maven)
+
+```xml
+<!-- ✅ Centralize versions in parent POM or dependencyManagement -->
+<dependencyManagement>
+    <dependencies>
+        <!-- BOM (Bill of Materials) — consistent version set -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-dependencies</artifactId>
+            <version>3.2.0</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+
+<!-- Child modules declare dependency without version -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+    <!-- version managed by BOM -->
+</dependency>
+```
+
+---
+
+## 9. SECURE CODING PRACTICES
+
+### SQL Injection Prevention
+
+```java
+// ❌ SQL Injection vulnerability
+public User findByUsername(String username) {
+    String sql = "SELECT * FROM users WHERE username = '" + username + "'";
+    // username = "'; DROP TABLE users; --" → catastrophic
+    return jdbcTemplate.queryForObject(sql, userMapper);
+}
+
+// ✅ Parameterized queries — always
+public Optional<User> findByUsername(String username) {
+    try {
+        User user = jdbcTemplate.queryForObject(
+            "SELECT * FROM users WHERE username = ?",  // parameter placeholder
+            userMapper,
+            username);                                  // bound separately, never interpolated
+        return Optional.of(user);
+    } catch (EmptyResultDataAccessException e) {
+        return Optional.empty();
+    }
+}
+
+// ✅ JPA Named Parameters
+@Query("SELECT u FROM User u WHERE u.username = :username AND u.active = true")
+Optional<User> findActiveByUsername(@Param("username") String username);
+```
+
+### Input Sanitization and Validation
+
+```java
+// ✅ Validate and sanitize all external input
+@RestController
+public class UserController {
+
+    @PostMapping("/users")
+    public ResponseEntity<UserResponse> createUser(
+            @Valid @RequestBody CreateUserRequest request) {
+        // @Valid triggers Bean Validation before method is called
+        return ResponseEntity.ok(userService.create(request));
+    }
+}
+
+public class CreateUserRequest {
+    @NotBlank(message = "Username is required")
+    @Size(min = 3, max = 50, message = "Username must be 3-50 characters")
+    @Pattern(regexp = "^[a-zA-Z0-9_-]+$", message = "Username: alphanumeric, _ and - only")
+    private String username;
+
+    @NotBlank @Email(message = "Valid email required")
+    private String email;
+
+    @NotBlank
+    @Size(min = 8, message = "Password must be at least 8 characters")
+    @Pattern(regexp = "^(?=.*[A-Z])(?=.*[0-9])(?=.*[^a-zA-Z0-9]).{8,}$",
+             message = "Password must contain uppercase, digit, and special character")
+    private String password;
+}
+```
+
+### Sensitive Data Handling
+
+```java
+// ✅ Password hashing — never store plaintext
+@Service
+public class AuthService {
+    // BCrypt — adaptive cost factor, built-in salt
+    private final PasswordEncoder encoder = new BCryptPasswordEncoder(12); // cost=12
+
+    public void register(String username, String plaintextPassword) {
+        String hash = encoder.encode(plaintextPassword);
+        userRepository.save(new User(username, hash));
+        // plaintextPassword is not stored anywhere
+    }
+
+    public boolean authenticate(String username, String plaintextPassword) {
+        return userRepository.findByUsername(username)
+            .map(user -> encoder.matches(plaintextPassword, user.getPasswordHash()))
+            .orElse(false);
+        // BCrypt.matches handles timing-safe comparison
+    }
+}
+
+// ✅ Use char[] for sensitive strings — can be zeroed after use
+// String is interned and cannot be zeroed
+public void processPassword(char[] password) {
+    try {
+        // use password
+        authenticateWith(password);
+    } finally {
+        Arrays.fill(password, '\0'); // zero out memory
+    }
+}
+
+// ✅ Secrets via environment variables or secrets manager, never hardcoded
+@Value("${payment.api.secret}") // loaded from env var, not source code
+private String paymentApiSecret;
+```
+
+### Preventing Common Vulnerabilities
+
+```java
+// ✅ Path traversal prevention
+public byte[] downloadFile(String filename) throws IOException {
+    // NEVER trust user-provided file paths directly
+    Path baseDir = Paths.get("/app/uploads").toRealPath();
+    Path requestedPath = baseDir.resolve(filename).toRealPath();
+
+    if (!requestedPath.startsWith(baseDir)) {
+        throw new SecurityException("Path traversal attempt detected: " + filename);
+    }
+
+    return Files.readAllBytes(requestedPath);
+}
+
+// ✅ Serialize/deserialize safely — avoid Java deserialization of untrusted data
+// Use JSON (Jackson) or Protobuf instead of Java Object Serialization
+// If Java serialization required:
+ObjectInputFilter filter = ObjectInputFilter.Config.createFilter(
+    "maxdepth=3;maxrefs=10;com.app.model.*;!*"); // whitelist allowed classes
+ObjectInputStream ois = new ObjectInputStream(inputStream);
+ois.setObjectInputFilter(filter);
+
+// ✅ XML External Entity (XXE) prevention
+DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+dbf.setFeature("http://xml.org/sax/features/external-general-entities", false);
+dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+dbf.setXIncludeAware(false);
+dbf.setExpandEntityReferences(false);
+```
+
+---
+
+## 10. API DESIGN GUIDELINES
+
+### REST API Design
+
+```java
+// ✅ Resource-oriented, noun-based URLs, proper HTTP verbs
+// GET    /orders              — list orders
+// GET    /orders/{id}         — get specific order
+// POST   /orders              — create order
+// PUT    /orders/{id}         — full replace
+// PATCH  /orders/{id}         — partial update
+// DELETE /orders/{id}         — delete order
+// GET    /orders/{id}/items   — sub-resource
+
+@RestController
+@RequestMapping("/api/v1/orders")  // versioned
+public class OrderController {
+
+    @GetMapping("/{id}")
+    public ResponseEntity<OrderResponse> getOrder(@PathVariable Long id) {
+        return orderService.findById(id)
+            .map(order -> ResponseEntity.ok(OrderResponse.from(order)))
+            .orElse(ResponseEntity.notFound().build());
+    }
+
+    @PostMapping
+    public ResponseEntity<OrderResponse> createOrder(
+            @Valid @RequestBody CreateOrderRequest request,
+            UriComponentsBuilder uriBuilder) {
+        Order created = orderService.create(request);
+        URI location = uriBuilder.path("/api/v1/orders/{id}")
+            .buildAndExpand(created.getId()).toUri();
+        return ResponseEntity
+            .created(location)          // 201 Created with Location header
+            .body(OrderResponse.from(created));
+    }
+
+    @PatchMapping("/{id}/status")
+    public ResponseEntity<OrderResponse> updateStatus(
+            @PathVariable Long id,
+            @Valid @RequestBody UpdateStatusRequest request) {
+        Order updated = orderService.updateStatus(id, request.getStatus());
+        return ResponseEntity.ok(OrderResponse.from(updated));
+    }
+}
+```
+
+### API Response Design
+
+```java
+// ✅ Consistent response structure
+public class ApiResponse<T> {
+    private final boolean success;
+    private final T data;
+    private final String message;
+    private final List<ValidationError> errors;
+    private final String traceId;
+    private final Instant timestamp;
+
+    public static <T> ApiResponse<T> success(T data) {
+        return new ApiResponse<>(true, data, null, null,
+            MDC.get("traceId"), Instant.now());
+    }
+
+    public static <T> ApiResponse<T> failure(String message, List<ValidationError> errors) {
+        return new ApiResponse<>(false, null, message, errors,
+            MDC.get("traceId"), Instant.now());
+    }
+}
+
+// ✅ Pagination for collection endpoints
+public class PageResponse<T> {
+    private final List<T> content;
+    private final int page;
+    private final int size;
+    private final long totalElements;
+    private final int totalPages;
+    private final boolean last;
+
+    // Constructed from Spring's Page<T>
+    public static <T> PageResponse<T> from(Page<T> page) {
+        return new PageResponse<>(
+            page.getContent(),
+            page.getNumber(),
+            page.getSize(),
+            page.getTotalElements(),
+            page.getTotalPages(),
+            page.isLast()
+        );
+    }
+}
+```
+
+### Java Library/Internal API Design
+
+```java
+// ✅ Fluent API design — readable, composable
+public class QueryBuilder {
+    private String table;
+    private final List<String> conditions = new ArrayList<>();
+    private String orderBy;
+    private Integer limit;
+
+    public static QueryBuilder from(String table) {
+        QueryBuilder qb = new QueryBuilder();
+        qb.table = table;
+        return qb;
+    }
+
+    public QueryBuilder where(String condition) {
+        conditions.add(condition);
+        return this;   // return this for chaining
+    }
+
+    public QueryBuilder orderBy(String column) {
+        this.orderBy = column;
+        return this;
+    }
+
+    public QueryBuilder limit(int n) {
+        this.limit = n;
+        return this;
+    }
+
+    public String build() {
+        // validate before building
+        Objects.requireNonNull(table, "Table name is required");
+        StringBuilder sql = new StringBuilder("SELECT * FROM ").append(table);
+        if (!conditions.isEmpty()) {
+            sql.append(" WHERE ").append(String.join(" AND ", conditions));
+        }
+        if (orderBy != null) sql.append(" ORDER BY ").append(orderBy);
+        if (limit != null) sql.append(" LIMIT ").append(limit);
+        return sql.toString();
+    }
+}
+
+// Self-documenting usage
+String query = QueryBuilder.from("orders")
+    .where("status = 'CONFIRMED'")
+    .where("created_at > '2024-01-01'")
+    .orderBy("created_at DESC")
+    .limit(100)
+    .build();
+```
+
+---
+
+## 11. TESTING STRATEGIES
+
+### Test Pyramid
+
+```
+           /\
+          /  \
+         / E2E\          ← Few, slow, brittle — Selenium, Playwright
+        /------\
+       /Integration\     ← Some — @SpringBootTest, Testcontainers
+      /------------\
+     /  Unit Tests  \    ← Many, fast, isolated — JUnit5, Mockito
+    /----------------\
+```
+
+### Unit Testing Best Practices
+
+```java
+// ✅ Arrange-Act-Assert (AAA) pattern, test one behavior per test
+@ExtendWith(MockitoExtension.class)
+class OrderServiceTest {
+
+    @Mock private OrderRepository orderRepository;
+    @Mock private PaymentService paymentService;
+    @Mock private EventPublisher eventPublisher;
+
+    @InjectMocks private OrderService orderService;
+
+    @Test
+    @DisplayName("Should place order successfully when payment succeeds")
+    void placeOrder_whenPaymentSucceeds_shouldSaveOrderAndPublishEvent() {
+        // Arrange
+        OrderRequest request = OrderRequest.builder()
+            .userId(1L).productId(42L).quantity(2).build();
+        Order expectedOrder = Order.builder()
+            .id(100L).userId(1L).status(OrderStatus.CONFIRMED).build();
+
+        when(orderRepository.save(any(Order.class))).thenReturn(expectedOrder);
+
+        // Act
+        Order result = orderService.placeOrder(request);
+
+        // Assert
+        assertThat(result.getId()).isEqualTo(100L);
+        assertThat(result.getStatus()).isEqualTo(OrderStatus.CONFIRMED);
+
+        // Verify interactions
+        verify(orderRepository, times(1)).save(any(Order.class));
+        verify(paymentService, times(1)).charge(eq(1L), any(BigDecimal.class));
+        verify(eventPublisher, times(1)).publishEvent(any(OrderPlacedEvent.class));
+    }
+
+    @Test
+    @DisplayName("Should throw PaymentDeclinedException and not save order when payment fails")
+    void placeOrder_whenPaymentDeclined_shouldNotSaveOrderAndThrow() {
+        // Arrange
+        OrderRequest request = OrderRequest.builder().userId(1L).productId(42L).build();
+        doThrow(new PaymentDeclinedException("Insufficient funds"))
+            .when(paymentService).charge(anyLong(), any(BigDecimal.class));
+
+        // Act + Assert
+        assertThatThrownBy(() -> orderService.placeOrder(request))
+            .isInstanceOf(PaymentDeclinedException.class)
+            .hasMessageContaining("Insufficient funds");
+
+        // Order must NOT be saved when payment fails
+        verify(orderRepository, never()).save(any(Order.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1, -100})
+    @DisplayName("Should reject invalid quantities")
+    void placeOrder_withInvalidQuantity_shouldThrowIllegalArgument(int quantity) {
+        OrderRequest request = OrderRequest.builder().quantity(quantity).build();
+
+        assertThatThrownBy(() -> orderService.placeOrder(request))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(orderRepository, paymentService);
+    }
+}
+```
+
+### Integration Testing with Testcontainers
+
+```java
+// ✅ Integration tests with real DB — no mocking infrastructure
+@SpringBootTest
+@Testcontainers
+@ActiveProfiles("integration-test")
+class OrderRepositoryIntegrationTest {
+
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15")
+        .withDatabaseName("orders_test")
+        .withUsername("test")
+        .withPassword("test");
+
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+    }
+
+    @Autowired private OrderRepository orderRepository;
+
+    @Test
+    @Transactional
+    void findByUserId_shouldReturnOnlyUserOrders() {
+        // Using real PostgreSQL — no mocking
+        Order order1 = orderRepository.save(buildOrder(userId: 1L));
+        Order order2 = orderRepository.save(buildOrder(userId: 1L));
+        Order order3 = orderRepository.save(buildOrder(userId: 2L));
+
+        List<Order> userOrders = orderRepository.findByUserId(1L);
+
+        assertThat(userOrders).hasSize(2)
+            .extracting(Order::getId)
+            .containsExactlyInAnyOrder(order1.getId(), order2.getId());
+    }
+}
+```
+
+### Test Coverage and Quality
+
+```java
+// ✅ Test edge cases explicitly — not just happy path
+@Test void findById_withNullId_shouldThrowNullPointer() { ... }
+@Test void findById_withNonExistentId_shouldReturnEmpty() { ... }
+@Test void findById_whenDatabaseDown_shouldThrowRepositoryException() { ... }
+@Test void findById_withValidId_shouldReturnOrder() { ... }  // happy path last
+
+// ✅ Test names describe BEHAVIOR, not implementation
+// ❌ test_method1(), testGetOrder(), testException()
+// ✅ getOrder_whenOrderExists_returnsOrderDetails()
+//    getOrder_whenOrderNotFound_returns404()
+//    getOrder_whenDatabaseUnavailable_returns503()
+```
+
+---
+
+## 12. CODE REVIEW PRACTICES
+
+### What to Look For
+
+```java
+// ✅ Checklist mental model for reviewers:
+
+// 1. CORRECTNESS — does it work for all cases?
+// Does this handle null inputs?
+public BigDecimal calculateDiscount(User user) {
+    // ❌ NPE if user.getMembership() returns null
+    return DISCOUNT_RATES.get(user.getMembership().getTier());
+    // ✅
+    // return Optional.ofNullable(user.getMembership())
+    //     .map(Membership::getTier)
+    //     .map(DISCOUNT_RATES::get)
+    //     .orElse(BigDecimal.ZERO);
+}
+
+// 2. SECURITY — any injection, exposure of sensitive data?
+// 3. PERFORMANCE — N+1 queries? Unbounded collections? Blocking on critical path?
+// 4. THREAD SAFETY — shared state accessed from multiple threads?
+// 5. ERROR HANDLING — exceptions caught and handled properly?
+// 6. TESTABILITY — is this testable? Are tests included?
+// 7. READABILITY — can a colleague understand this in 6 months?
+```
+
+### Constructive Review Comments
+
+```
+// ❌ BAD review comments:
+"This is wrong"
+"Why did you do this?"
+"This is terrible code"
+
+// ✅ GOOD review comments follow: Observation → Impact → Suggestion
+
+Observation: "This method is 150 lines long"
+Impact: "It's difficult to test individual steps and understand the flow"
+Suggestion: "Consider extracting validatePayment(), calculateTotal(), and
+             notifyUser() as separate methods — each becomes independently testable"
+
+Observation: "The cache Map here has no size limit"
+Impact: "Under load this will grow unbounded and cause OutOfMemoryError"
+Suggestion: "Consider using Caffeine with .maximumSize(10_000)
+             .expireAfterWrite(5, MINUTES)"
+
+// Label non-blocking comments to reduce friction
+"nit: rename `d` to `elapsedDays` for clarity"
+"question: is this intentionally package-private?"
+"suggestion: could use Optional here instead of null check — not a blocker"
+```
+
+---
+
+## 13. DOCUMENTATION STANDARDS
+
+### Javadoc Best Practices
+
+```java
+/**
+ * Processes a payment for the given order, charging the user's default payment method.
+ *
+ * <p>This method is idempotent when called with the same {@code idempotencyKey}.
+ * Subsequent calls with the same key return the original result without re-charging.
+ *
+ * @param order          the order to process payment for; must not be {@code null}
+ * @param idempotencyKey unique key for idempotent processing; must not be blank
+ * @return a {@link PaymentReceipt} containing transaction details and confirmation number
+ * @throws PaymentDeclinedException   if the payment method declines the charge
+ * @throws PaymentServiceException    if the payment gateway is unavailable
+ * @throws IllegalArgumentException   if order is null or idempotencyKey is blank
+ *
+ * @since 2.1.0
+ * @see #refundPayment(String, BigDecimal)
+ */
+public PaymentReceipt processPayment(Order order, String idempotencyKey) { ... }
+
+// ✅ Document the WHY for non-obvious implementation decisions
+public void process(Order order) {
+    // Two-phase approach: reserve inventory first, then charge payment.
+    // Charging before reservation risks payment without fulfillment.
+    // Reservation before payment risks holding inventory without payment.
+    // Chosen approach: reserve, charge, confirm. Rollback reservation if charge fails.
+    inventoryService.reserve(order);
+    try {
+        paymentService.charge(order);
+    } catch (PaymentException e) {
+        inventoryService.release(order); // compensating transaction
+        throw e;
+    }
+    inventoryService.confirm(order);
+}
+
+// ✅ @deprecated with migration path
+/**
+ * @deprecated since 3.0.0, use {@link #processPaymentV2(PaymentRequest)} instead.
+ *             V2 supports multi-currency and 3D Secure. Removal planned for 4.0.0.
+ */
+@Deprecated(since = "3.0.0", forRemoval = true)
+public Receipt processPayment(Order order) { ... }
+```
+
+---
+
+## 14. MODULAR DESIGN
+
+### Package Organization — by Feature, Not Layer
+
+```
+// ❌ Layer-based (everything cut horizontal)
+com.app.controllers/    → OrderController, UserController, ProductController
+com.app.services/       → OrderService, UserService, ProductService
+com.app.repositories/   → OrderRepository, UserRepository, ProductRepository
+// Problem: Adding a feature touches 3+ packages; unrelated concerns mixed per layer
+
+// ✅ Feature-based (cohesive vertical slices)
+com.app.order/
+  ├── OrderController.java
+  ├── OrderService.java
+  ├── OrderRepository.java
+  ├── Order.java
+  ├── OrderItem.java
+  ├── OrderStatus.java
+  └── dto/
+      ├── CreateOrderRequest.java
+      └── OrderResponse.java
+
+com.app.user/
+  ├── UserController.java
+  ├── UserService.java
+  └── ...
+
+com.app.payment/
+  ├── PaymentService.java
+  ├── PaymentGateway.java       ← interface
+  ├── stripe/StripeGateway.java ← implementation
+  └── ...
+
+com.app.shared/
+  ├── domain/Money.java          ← shared value objects
+  ├── events/DomainEvent.java    ← shared event types
+  └── exception/AppException.java
+```
+
+### Java 9+ Modules (JPMS)
+
+```java
+// module-info.java — explicit module boundaries
+module com.app.order {
+    requires com.app.shared;          // declared dependency
+    requires spring.context;
+    requires spring.data.jpa;
+
+    exports com.app.order.api;        // only expose public API
+    // com.app.order.internal NOT exported — truly private
+
+    opens com.app.order.domain to spring.core; // allow Spring reflection
+}
+
+module com.app.payment {
+    requires com.app.shared;
+    // does NOT require com.app.order — no circular dependency
+    exports com.app.payment.api;
+}
+```
+
+### ArchUnit — Enforce Architecture Rules
+
+```java
+// ✅ Architecture rules as tests — fail CI if violated
+@AnalyzeClasses(packages = "com.app")
+public class ArchitectureRulesTest {
+
+    @ArchTest
+    static final ArchRule controllersDontDependOnRepositories =
+        noClasses().that().resideInAPackage("..controller..")
+            .should().dependOnClassesThat()
+            .resideInAPackage("..repository..");
+
+    @ArchTest
+    static final ArchRule servicesDontDependOnControllers =
+        noClasses().that().resideInAPackage("..service..")
+            .should().dependOnClassesThat()
+            .resideInAPackage("..controller..");
+
+    @ArchTest
+    static final ArchRule noCyclicDependencies =
+        slices().matching("com.app.(*)..").should().beFreeOfCycles();
+
+    @ArchTest
+    static final ArchRule domainHasNoDependencies =
+        classes().that().resideInAPackage("..domain..")
+            .should().onlyDependOnClassesThat()
+            .resideInAnyPackage("..domain..", "java..", "javax..");
+}
+```
+
+---
+
+## 15. PERFORMANCE BEST PRACTICES
+
+### Collections and Streams
+
+```java
+// ✅ Right-size collections at creation — avoid resize overhead
+List<Order> orders = new ArrayList<>(expectedSize);       // pre-sized
+Map<Long, User> userMap = new HashMap<>(expectedSize * 2); // 2x for load factor
+
+// ✅ Choose correct collection for access pattern
+List<String> list = new ArrayList<>();   // random access O(1), append O(1)
+List<String> list = new LinkedList<>();  // frequent insert/remove at middle O(1)
+Map<K,V>  map  = new HashMap<>();        // fast lookup O(1)
+Map<K,V>  map  = new TreeMap<>();        // sorted iteration O(log n)
+Set<K>    set  = new HashSet<>();        // contains() O(1)
+Set<K>    set  = new LinkedHashSet<>();  // maintains insertion order
+
+// ✅ Stream performance — avoid intermediate collections
+// ❌ Collects then streams again
+List<String> names = users.stream()
+    .map(User::getName)
+    .collect(Collectors.toList());     // intermediate collection
+names.stream().filter(...).count();   // stream again
+
+// ✅ Single pipeline
+long count = users.stream()
+    .map(User::getName)
+    .filter(name -> name.startsWith("A"))
+    .count();  // no intermediate collection
+
+// ✅ Parallel streams — only for CPU-intensive, large datasets, no shared state
+long wordCount = largeTextList.parallelStream()
+    .mapToInt(text -> text.split("\\s+").length)
+    .sum();
+// Don't use parallel for: IO-bound, small data, ordered operations, shared state
+```
+
+### String Performance
+
+```java
+// ✅ StringBuilder for string construction in loops
+// ❌ String concatenation in loop — O(n²) — each + creates new String
+String result = "";
+for (String item : items) {
+    result += item + ", ";  // creates new String each iteration
+}
+
+// ✅ StringBuilder — O(n)
+StringBuilder sb = new StringBuilder(items.size() * 20); // estimated capacity
+for (String item : items) {
+    sb.append(item).append(", ");
+}
+String result = sb.toString();
+
+// ✅ Even cleaner for joining
+String result = String.join(", ", items);
+// or
+String result = items.stream().collect(Collectors.joining(", "));
+```
+
+### Database Performance
+
+```java
+// ✅ N+1 query problem — the most common performance killer
+// ❌ N+1: 1 query for orders + N queries for each user
+List<Order> orders = orderRepository.findAll();
+orders.forEach(order -> {
+    User user = userRepository.findById(order.getUserId()); // N queries!
+    sendEmail(user, order);
+});
+
+// ✅ JOIN FETCH or batch loading
+@Query("SELECT o FROM Order o JOIN FETCH o.user WHERE o.status = :status")
+List<Order> findByStatusWithUser(@Param("status") OrderStatus status);
+
+// ✅ Pagination — never load unbounded data
+@GetMapping("/orders")
+public PageResponse<OrderResponse> getOrders(
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "20") int size) {
+    Pageable pageable = PageRequest.of(page, Math.min(size, 100), // cap max size
+        Sort.by(Sort.Direction.DESC, "createdAt"));
+    return PageResponse.from(orderRepository.findAll(pageable).map(OrderResponse::from));
+}
+
+// ✅ Projections — only select needed columns
+public interface OrderSummary {
+    Long getId();
+    String getStatus();
+    BigDecimal getTotal();
+    // Not fetching large description, blob fields, etc.
+}
+
+List<OrderSummary> summaries = orderRepository.findAllProjectedBy(OrderSummary.class);
+```
+
+---
+
+## 16. MEMORY SAFETY
+
+### Object Lifecycle Management
+
+```java
+// ✅ Use Optional to make null-safety explicit in APIs
+public Optional<User> findByEmail(String email) {
+    return Optional.ofNullable(userRepository.findByEmail(email));
+}
+
+// Consumer must explicitly handle absence
+userService.findByEmail(email)
+    .map(user -> user.getProfile())
+    .filter(profile -> profile.isComplete())
+    .ifPresentOrElse(
+        profile -> processProfile(profile),
+        () -> log.warn("No complete profile found for email: {}", email)
+    );
+
+// ✅ Weak references for observer patterns and caches
+public class WeakCache<K, V> {
+    private final Map<K, WeakReference<V>> cache = new ConcurrentHashMap<>();
+
+    public void put(K key, V value) {
+        cache.put(key, new WeakReference<>(value));
+    }
+
+    public Optional<V> get(K key) {
+        WeakReference<V> ref = cache.get(key);
+        if (ref == null) return Optional.empty();
+
+        V value = ref.get();
+        if (value == null) {
+            cache.remove(key); // clean up collected entry
+            return Optional.empty();
+        }
+        return Optional.of(value);
+    }
+}
+```
+
+### Avoiding Memory Waste
+
+```java
+// ✅ Lazy initialization for expensive objects
+public class ReportService {
+    private PdfRenderer renderer; // null until first needed
+
+    private PdfRenderer getRenderer() {
+        if (renderer == null) {
+            renderer = new PdfRenderer(); // expensive initialization
+        }
+        return renderer;
+        // Thread-safe version: use double-checked locking or Supplier<T>
+    }
+}
+
+// ✅ Thread-safe lazy initialization with Supplier
+public class ServiceContext {
+    private final Supplier<ExpensiveService> serviceSupplier =
+        Suppliers.memoize(this::createExpensiveService); // Guava
+
+    private ExpensiveService createExpensiveService() {
+        return new ExpensiveService(config);
+    }
+
+    public ExpensiveService getService() {
+        return serviceSupplier.get(); // initialized once, thread-safe
+    }
+}
+```
+
+---
+
+## 17. SCALABILITY GUIDELINES
+
+### Stateless Services
+
+```java
+// ✅ Services should be stateless — horizontal scaling possible
+@Service
+public class OrderService {
+    // ❌ Instance-level state — breaks horizontal scaling
+    // private int orderCount = 0;
+
+    // ✅ All state in: DB, cache (Redis), or passed as parameters
+    private final OrderRepository repository; // stateless infrastructure
+    private final RedisTemplate<String, Integer> redisTemplate; // external state
+
+    public int getTodayOrderCount() {
+        return redisTemplate.opsForValue()
+            .get("order:count:" + LocalDate.now()); // shared external state
+    }
+}
+```
+
+### Circuit Breaker Pattern
+
+```java
+// ✅ Resilience4j circuit breaker — prevent cascade failures
+@CircuitBreaker(name = "paymentService",
+                fallbackMethod = "paymentFallback")
+@Retry(name = "paymentService")
+@TimeLimiter(name = "paymentService")
+public CompletableFuture<PaymentResult> processPayment(PaymentRequest request) {
+    return CompletableFuture.supplyAsync(() ->
+        externalPaymentGateway.charge(request));
+}
+
+public CompletableFuture<PaymentResult> paymentFallback(
+        PaymentRequest request, Throwable ex) {
+    log.error("Payment service unavailable, using fallback", ex);
+    // Queue for later processing or return queued status
+    pendingPaymentQueue.enqueue(request);
+    return CompletableFuture.completedFuture(
+        PaymentResult.queued(request.getOrderId()));
+}
+
+// application.yml
+// resilience4j.circuitbreaker.instances.paymentService:
+//   slidingWindowSize: 10
+//   failureRateThreshold: 50        # open circuit at 50% failures
+//   waitDurationInOpenState: 30s    # wait before half-open
+//   permittedNumberOfCallsInHalfOpenState: 3
+```
+
+### Caching Strategy
+
+```java
+// ✅ Cache-aside pattern with proper invalidation
+@Service
+public class ProductCatalogService {
+
+    @Cacheable(
+        value = "products",
+        key = "#id",
+        condition = "#id != null",
+        unless = "#result == null"
+    )
+    public Product getProduct(Long id) {
+        return productRepository.findById(id)
+            .orElseThrow(() -> new ProductNotFoundException(id));
+    }
+
+    @CachePut(value = "products", key = "#result.id")
+    public Product updateProduct(Long id, UpdateProductRequest request) {
+        Product product = getProduct(id);
+        product.apply(request);
+        return productRepository.save(product);
+    }
+
+    @CacheEvict(value = "products", key = "#id")
+    public void deleteProduct(Long id) {
+        productRepository.deleteById(id);
+    }
+
+    @CacheEvict(value = "products", allEntries = true) // scheduled full refresh
+    @Scheduled(cron = "0 0 2 * * *") // 2 AM daily
+    public void clearProductCache() {
+        log.info("Product cache cleared");
+    }
+}
+```
+
+---
+
+## 18. CI/CD INTEGRATION
+
+### Build Pipeline Best Practices
+
+```yaml
+# ✅ GitHub Actions — complete CI pipeline
+name: Java CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+
+      - name: Compile
+        run: mvn compile -B
+
+      - name: Unit Tests
+        run: mvn test -B -Dtest="**/*Test" -Dsurefire.failIfNoSpecifiedTests=false
+
+      - name: Integration Tests
+        run: mvn verify -B -P integration-tests
+
+      - name: Code Coverage Check
+        run: mvn jacoco:check  # fails if coverage < threshold
+
+      - name: Static Analysis
+        run: mvn spotbugs:check pmd:check checkstyle:check
+
+      - name: OWASP Dependency Check
+        run: mvn org.owasp:dependency-check-maven:check
+
+      - name: Build Docker Image
+        run: docker build -t myapp:${{ github.sha }} .
+
+      - name: Push to Registry
+        if: github.ref == 'refs/heads/main'
+        run: docker push myregistry.io/myapp:${{ github.sha }}
+```
+
+### Quality Gates in Maven
+
+```xml
+<!-- ✅ Enforce quality gates — build fails if not met -->
+<plugin>
+    <groupId>org.jacoco</groupId>
+    <artifactId>jacoco-maven-plugin</artifactId>
+    <configuration>
+        <rules>
+            <rule>
+                <element>BUNDLE</element>
+                <limits>
+                    <limit>
+                        <counter>LINE</counter>
+                        <value>COVEREDRATIO</value>
+                        <minimum>0.80</minimum>  <!-- 80% line coverage required -->
+                    </limit>
+                    <limit>
+                        <counter>BRANCH</counter>
+                        <value>COVEREDRATIO</value>
+                        <minimum>0.75</minimum>  <!-- 75% branch coverage required -->
+                    </limit>
+                </limits>
+            </rule>
+        </rules>
+    </configuration>
+</plugin>
+
+<!-- ✅ Enforce dependency versions — prevent using vulnerable libraries -->
+<plugin>
+    <groupId>org.apache.maven.plugins</groupId>
+    <artifactId>maven-enforcer-plugin</artifactId>
+    <configuration>
+        <rules>
+            <requireJavaVersion>
+                <version>[21,)</version>
+            </requireJavaVersion>
+            <bannedDependencies>
+                <excludes>
+                    <exclude>log4j:log4j</exclude>  <!-- log4shell vulnerable versions -->
+                    <exclude>commons-collections:commons-collections:[3.0,3.2.1]</exclude>
+                </excludes>
+            </bannedDependencies>
+            <requireUpperBoundDeps/>  <!-- ensure consistent transitive deps -->
+        </rules>
+    </configuration>
+</plugin>
+```
+
+---
+
+## 19. INTERVIEW QUESTIONS
+
+**Q1. What's the difference between fail-fast and fail-safe in the context of Java collections, and how does this relate to defensive programming?**
+
+> Fail-fast iterators (e.g., `ArrayList`, `HashMap`) throw `ConcurrentModificationException` immediately when the collection is modified during iteration — they detect the problem early and loudly. Fail-safe iterators (e.g., `CopyOnWriteArrayList`, `ConcurrentHashMap`) work on a snapshot and never throw — but may iterate over stale data. Defensive programming prefers fail-fast: surface errors immediately at the source rather than propagating incorrect state. In practice: use fail-safe collections when reads vastly outnumber writes; use fail-fast for single-threaded code and always iterate defensively (don't modify and iterate).
+
+---
+
+**Q2. When should you use checked exceptions vs unchecked exceptions in a modern Java application?**
+
+> The industry has largely moved toward unchecked exceptions for several reasons: checked exceptions propagate through every layer, pollute interfaces (especially lambdas can't throw checked exceptions cleanly), and callers often just rethrow them anyway. Best practice: use unchecked exceptions for all application exceptions; reserve checked exceptions for genuinely recoverable conditions where you want to force callers to explicitly handle them (e.g., `FileNotFoundException` in a storage API where the caller must decide whether to retry or use a default). Document unchecked exceptions thoroughly with `@throws` Javadoc.
+
+---
+
+**Q3. How do you design a thread-safe class without using `synchronized` everywhere?**
+
+> Several approaches in order of preference: (1) **Immutability** — the best option; immutable objects require no synchronization. (2) **Thread confinement** — ensure only one thread ever accesses the object (stack variables, ThreadLocal). (3) **Atomic variables** — `AtomicLong`, `AtomicReference` for simple state. (4) **Concurrent collections** — `ConcurrentHashMap`, `CopyOnWriteArrayList` for shared data structures. (5) **`volatile`** — for single variable visibility without compound actions. (6) `ReentrantReadWriteLock` — for read-heavy scenarios. (7) `synchronized` — last resort, simplest, most contention.
+
+---
+
+**Q4. Describe the principle of least privilege and how you apply it in Java code.**
+
+> Least privilege means granting only the minimum access necessary. In Java: use the most restrictive access modifier possible (`private` by default, only increase when needed); mark fields `final` unless mutability is required; return `unmodifiableList()` or `List.copyOf()` instead of internal collections; avoid exposing internal state through getters that return mutable objects; use package-private classes for implementation details; with JPMS, only `export` the public API package. In security context: run application with minimal OS permissions, use RBAC for API endpoints, validate that the authenticated user owns the resource they're accessing.
+
+---
+
+**Q5. How do you approach performance optimization in a Java service that is responding slowly?**
+
+> Follow a structured approach: (1) **Measure first** — use profiling tools (async-profiler, JFR) to identify actual bottlenecks, never guess. (2) **Check obvious suspects** — N+1 queries (add SQL logging), missing indexes (EXPLAIN ANALYZE), unbounded result sets (add pagination). (3) **Application profiling** — identify hot methods, excessive object allocation, GC pressure. (4) **Concurrency analysis** — thread dumps for deadlocks, lock contention with JFR. (5) **Fix the biggest impact first** — typically database optimization yields 10-100x, algorithm improvement 5-50x, micro-optimization rarely more than 2x. (6) **Measure after** — quantify the improvement, document the change.
+
+---
+
+**Q6. What makes an API design "good" at the senior level?**
+
+> Good API design: (1) **Consistency** — similar things look similar (naming, error handling, return types). (2) **Minimal surface area** — expose only what's needed (YAGNI for APIs). (3) **Impossible to misuse** — type system prevents wrong usage; required params in constructor/factory method. (4) **Self-documenting** — method names express intent completely; Javadoc explains WHY not WHAT. (5) **Stable contracts** — deprecation paths, versioning strategy, backward compatibility. (6) **Testable** — interfaces over concrete classes; no static dependencies. (7) **Fail loudly** — validate inputs immediately, throw specific exceptions. The API should be easy to use correctly and hard to use incorrectly.
+
+---
+
+**Q7. How does the Java Memory Model (JMM) affect your code design?**
+
+> The JMM defines how threads interact through memory, particularly around visibility and ordering. Key rules: (1) **`volatile` guarantees visibility** — a write to a volatile variable happens-before all subsequent reads. (2) **`synchronized` establishes happens-before** — unlocking a monitor happens-before locking it again. (3) **`final` fields** — safely published after construction without synchronization. (4) **Instruction reordering** — the JVM and CPU can reorder instructions for optimization, which is why DCL Singleton without `volatile` is broken. In practice: use `volatile` for single-variable flags, `AtomicXxx` for compound operations, `synchronized` or `Lock` for critical sections, immutable objects to avoid visibility issues entirely.
+
+---
+
+**Q8. Explain your approach to designing for testability from the start.**
+
+> Testability is primarily a design concern, not a testing concern: (1) **Constructor injection** — dependencies passed in, enabling mock injection without Spring context. (2) **Depend on interfaces** — inject `PaymentGateway` not `StripePaymentGateway`; mock the interface in tests. (3) **No `new` for services inside methods** — factories or injection only. (4) **No static method calls for services** — static is untestable; inject as dependency. (5) **Small, focused methods** — single responsibility makes unit testing specific behaviors possible. (6) **Clock injection** — never use `LocalDate.now()` directly; inject `Clock` so tests can control time. (7) **Separate I/O from logic** — pure functions for calculation logic tested without DB/network.
+
+---
+
+## 20. SUMMARY / CHEAT SHEET
+
+```
+CLEAN CODE:
+├── Names reveal intent — no abbreviations, no generic names
+├── Methods do ONE thing at ONE level of abstraction (SLAP)
+├── Guard clauses over nested conditionals
+└── Constants over magic numbers
+
+DEFENSIVE PROGRAMMING:
+├── Validate all inputs at public method boundaries — fail fast
+├── Return defensive copies of mutable state
+├── Use Objects.requireNonNull() and Preconditions
+└── Assertions for internal invariants (not user input)
+
+IMMUTABILITY:
+├── final class, final fields, no setters
+├── Return new instances from "modifier" methods
+├── Use Java Records for simple value objects
+└── List.copyOf() / Map.copyOf() for collections
+
+EXCEPTION HANDLING:
+├── Domain-specific exception hierarchy extending RuntimeException
+├── Always preserve cause: super(message, cause)
+├── Never swallow — catch specific, handle meaningfully, or rethrow
+└── Translate at layer boundaries (SQL → domain exception)
+
+LOGGING:
+├── Parameterized logging — never string concatenation
+├── MDC for request correlation (traceId, userId)
+├── Never log PII/credentials/card numbers
+└── INFO for business events, WARN for handled failures, ERROR for bugs
+
+CONCURRENCY:
+├── Prefer immutability → no sync needed
+├── Use AtomicXxx for counters, ConcurrentHashMap for maps
+├── Lock ordering to prevent deadlock
+└── CompletableFuture / Virtual Threads for async I/O
+
+SECURITY:
+├── Parameterized queries — never string SQL interpolation
+├── @Valid + Bean Validation on all API inputs
+├── BCrypt for passwords, never plaintext
+└── Env vars for secrets, never hardcoded
+
+TESTING:
+├── Test pyramid: many unit, some integration, few E2E
+├── AAA pattern: Arrange-Act-Assert
+├── Test behavior not implementation — one assertion concept per test
+└── Testcontainers for real DB integration tests
+
+PERFORMANCE:
+├── Profile before optimizing — never guess
+├── Right-size collections at creation
+├── Avoid N+1 queries — use JOIN FETCH or projections
+└── Paginate all collection endpoints
+
+CI/CD:
+├── Quality gates: coverage, static analysis, security scan
+├── Build fails on test failure, coverage drop, or known vulnerability
+├── ArchUnit tests enforce architectural rules
+└── Automated dependency vulnerability scanning (OWASP)
+
+SENIOR ENGINEER MINDSET:
+"Make it work → Make it right → Make it fast"
+"Optimize for the reader, not the writer"
+"Design for failure — everything that can fail, will fail"
+"Code is read 10x more than written — optimize for reading"
+```
+
+
+
 
